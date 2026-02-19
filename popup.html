@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Scroll Saver</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+
+<body>
+  <div class="container">
+
+    <section class="current-page">
+      <div class="section-header">
+        <h2>Current Page</h2>
+        <div class="toggle-switch">
+          <input type="checkbox" id="extension-toggle" class="toggle-checkbox">
+          <label for="extension-toggle" class="toggle-label">
+            <span class="toggle-text">Enabled</span>
+          </label>
+        </div>
+      </div>
+      <div class="position-item">
+        <div id="current-info">
+          <p class="loading">Loading...</p>
+        </div>
+        <div class="actions">
+          <button id="refresh" class="btn btn-small">Refresh</button>
+          <button id="clear-current" class="btn btn-danger btn-small" disabled>Delete</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="all-positions">
+      <div class="section-header">
+        <h2>Stored Websites</h2>
+        <button id="clear-all" class="btn btn-danger btn-small">Delete all</button>
+      </div>
+      <div id="positions-list">
+        <p class="empty">No saved positions yet</p>
+      </div>
+    </section>
+
+    <footer>
+      <p class="help">
+        <strong>How it works:</strong> Saves your scroll position on articles. Restores it when you return.
+      </p>
+      <p class="stats">
+        <span id="stats-count">0</span> positions saved
+      </p>
+    </footer>
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+
+</html>

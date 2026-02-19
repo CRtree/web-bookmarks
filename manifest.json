@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Scroll Saver",
+  "version": "1.0.0",
+  "description": "Saves your scroll position on articles and restores it when you return.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "alarms",
+    "tabs"
+  ],
+  "host_permissions": [
+    "<all_urls>"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "16": "icons/bookmark_16.png",
+      "48": "icons/bookmark_48.png",
+      "128": "icons/bookmark_128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/bookmark_16.png",
+    "48": "icons/bookmark_48.png",
+    "128": "icons/bookmark_128.png"
+  }
+}
