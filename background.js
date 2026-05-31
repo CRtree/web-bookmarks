@@ -18,6 +18,15 @@ function normalizeUrl(url) {
       }
     }
 
+    // YouTube normalization
+    if (urlObj.hostname.includes('youtube.com') || urlObj.hostname.includes('youtu.be')) {
+      // For channel pages, strip query params to normalize
+      if (urlObj.pathname.startsWith('/@')) {
+        urlObj.search = '';
+        urlObj.hash = '';
+      }
+    }
+
     return urlObj.toString();
   } catch (e) {
     console.warn('URL normalization failed, using original:', url, e);
@@ -192,10 +201,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       return true;
     }
 
-    chrome.storage.local.get(['enabled_sites'], (result) => {
-      const enabledSites = result.enabled_sites || {};
-      const isEnabled = enabledSites[normalizedUrl] === true;
-      console.log('get_extension_enabled result:', { isEnabled, enabled: isEnabled });
+    chrome.storage.local.get(['disabled_sites'], (result) => {
+      const disabledSites = result.disabled_sites || {};
+      const isEnabled = !disabledSites[normalizedUrl];
+      console.log('get_extension_enabled result:', { isEnabled, disabled: !!disabledSites[normalizedUrl] });
       sendResponse({ enabled: isEnabled });
     });
     return true;
@@ -213,19 +222,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       return true;
     }
 
-    chrome.storage.local.get(['enabled_sites'], (result) => {
-      const enabledSites = result.enabled_sites || {};
+    chrome.storage.local.get(['disabled_sites'], (result) => {
+      const disabledSites = result.disabled_sites || {};
 
       if (enabled) {
-        // Add to enabled sites
-        enabledSites[normalizedUrl] = true;
+        delete disabledSites[normalizedUrl];
       } else {
-        // Remove from enabled sites
-        delete enabledSites[normalizedUrl];
+        disabledSites[normalizedUrl] = true;
       }
 
-      chrome.storage.local.set({ enabled_sites: enabledSites }, () => {
-        console.log('set_extension_enabled: updated enabled_sites, count:', Object.keys(enabledSites).length);
+      chrome.storage.local.set({ disabled_sites: disabledSites }, () => {
+        console.log('set_extension_enabled: updated disabled_sites, count:', Object.keys(disabledSites).length);
         sendResponse({ success: true });
       });
     });

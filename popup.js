@@ -170,7 +170,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         console.log('Popup: Extension enabled state:', response.enabled);
-        const isEnabled = response.enabled === true; // default to false if undefined
+        const isEnabled = response.enabled !== false; // default to true if undefined
 
         // Update toggle checkbox
         if (extensionToggle) {
@@ -251,9 +251,19 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 
     document.querySelectorAll('.goto').forEach(btn => {
-      btn.addEventListener('click', function() {
+      btn.addEventListener('click', function(e) {
+        e.preventDefault();
         const url = this.getAttribute('data-url');
-        chrome.tabs.create({ url });
+        if (!url) {
+          console.error('Popup: No URL found on goto button');
+          return;
+        }
+        chrome.tabs.create({ url }, (tab) => {
+          if (chrome.runtime.lastError) {
+            console.error('Popup: chrome.tabs.create failed:', chrome.runtime.lastError.message, 'falling back to window.open');
+            window.open(url, '_blank');
+          }
+        });
       });
     });
   }

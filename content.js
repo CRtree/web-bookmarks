@@ -34,6 +34,10 @@
   const MAX_RETRIES = 10;
   const RETRY_DELAY_MS = 1000;
 
+  // Progressive scroll state (for infinite-scroll / paginated pages)
+  let progressiveScrollTimer = null;
+  let progressiveScrollActive = false;
+
   // Normalize URL for storage (remove tracking parameters, etc.)
   function normalizeUrl(url) {
     try {
@@ -47,6 +51,15 @@
 
         // Keep only the path for tweet pages (remove fragments)
         if (urlObj.pathname.includes('/status/')) {
+          urlObj.hash = '';
+        }
+      }
+
+      // YouTube normalization
+      if (urlObj.hostname.includes('youtube.com') || urlObj.hostname.includes('youtu.be')) {
+        // For channel pages, strip query params to normalize
+        if (urlObj.pathname.startsWith('/@')) {
+          urlObj.search = '';
           urlObj.hash = '';
         }
       }
@@ -102,11 +115,39 @@
     return isLongPage || isTextHeavy;
   }
 
-  // Get current scroll position
+  // Get the element that actually scrolls
+  function getScrollContainer() {
+    return null; // null means use window/document.body
+  }
+
+  // Get scroll position using the correct scroll container
   function getScrollPosition() {
+    const container = getScrollContainer();
+    let maxScroll, scrollY;
+
+    if (container && container !== document.body) {
+      scrollY = container.scrollTop;
+      maxScroll = container.scrollHeight - container.clientHeight;
+    } else {
+      scrollY = window.scrollY;
+      const docHeight = Math.max(
+        document.body.scrollHeight,
+        document.documentElement.scrollHeight,
+        document.body.offsetHeight,
+        document.documentElement.offsetHeight
+      );
+      maxScroll = docHeight - window.innerHeight;
+    }
+
+    let scrollPercent;
+    if (maxScroll > 0) {
+      scrollPercent = Math.min(100, Math.max(0, (scrollY / maxScroll) * 100));
+    } else {
+      scrollPercent = 0;
+    }
     return {
-      scrollY: window.scrollY,
-      scrollPercent: (window.scrollY / (document.body.scrollHeight - window.innerHeight)) * 100,
+      scrollY: scrollY,
+      scrollPercent: scrollPercent,
       timestamp: Date.now(),
       url: currentUrl,
       title: document.title
@@ -150,9 +191,74 @@
     }
   }
 
+  // Clean up progressive scroll resources
+  function cleanupProgressiveScroll() {
+    progressiveScrollActive = false;
+    if (progressiveScrollTimer) {
+      clearTimeout(progressiveScrollTimer);
+      progressiveScrollTimer = null;
+    }
+    isRestoring = false;
+  }
+
+  // Scroll to a position incrementally, triggering pagination along the way
+  function progressiveScrollToPosition(targetScrollY, attempt) {
+    attempt = attempt || 0;
+    const MAX_ATTEMPTS = 40;
+    const RETRY_DELAY = 1000;
+    const container = getScrollContainer();
+    const isCustomContainer = container && container !== document.body;
+
+    if (attempt >= MAX_ATTEMPTS) {
+      const currentY = isCustomContainer ? container.scrollTop : window.scrollY;
+      console.log('Progressive scroll: max attempts reached at', currentY, 'target was', targetScrollY);
+      cleanupProgressiveScroll();
+      return;
+    }
+
+    if (!isExtensionValid()) {
+      cleanupProgressiveScroll();
+      return;
+    }
+
+    const effectiveHeight = isCustomContainer
+      ? container.scrollHeight
+      : Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+    const maxScroll = Math.max(0, effectiveHeight - (isCustomContainer ? container.clientHeight : window.innerHeight));
+    const scrollTarget = Math.min(targetScrollY, maxScroll);
+
+    if (isCustomContainer) {
+      container.scrollTo({ top: scrollTarget, behavior: 'instant' });
+    } else {
+      window.scrollTo({ top: scrollTarget, behavior: 'instant' });
+    }
+
+    const currentY = isCustomContainer ? container.scrollTop : window.scrollY;
+    const containerHeight = effectiveHeight;
+    console.log('Progressive scroll attempt', attempt + 1, '/', MAX_ATTEMPTS,
+      'scrolled to', currentY, 'target', targetScrollY,
+      'page height', containerHeight);
+
+    if (currentY >= targetScrollY - 100) {
+      console.log('Progressive scroll: reached target at', currentY);
+      cleanupProgressiveScroll();
+      return;
+    }
+
+    // Dispatch a scroll event on the right element to trigger lazy loading
+    (isCustomContainer ? container : window).dispatchEvent(new Event('scroll', { bubbles: true }));
+
+    // Wait for content to load, then try again
+    progressiveScrollTimer = setTimeout(() => {
+      progressiveScrollToPosition(targetScrollY, attempt + 1);
+    }, RETRY_DELAY);
+  }
+
   // Restore scroll position from storage
-  function restoreScrollPosition() {
-    console.log('🔄 restoreScrollPosition called, isRestoring:', isRestoring, 'isTrackingActive:', isTrackingActive);
+  // urlOverride: skip the mutable global currentUrl — use this URL for storage key lookup
+  function restoreScrollPosition(urlOverride) {
+    const targetUrl = urlOverride || currentUrl;
+    console.log('🔄 restoreScrollPosition called, url:', targetUrl, 'isRestoring:', isRestoring);
     if (isRestoring) {
       console.log('Already restoring, skipping');
       return;
@@ -164,7 +270,7 @@
       return;
     }
 
-    const key = getStorageKey(currentUrl);
+    const key = getStorageKey(targetUrl);
     console.log('Looking for storage key:', key);
 
     try {
@@ -182,7 +288,9 @@
         }
 
         // Don't restore if we're already scrolled past the saved position
-        const currentScroll = window.scrollY;
+        const container = getScrollContainer();
+        const isCustomContainer = container && container !== document.body;
+        const currentScroll = isCustomContainer ? container.scrollTop : window.scrollY;
         console.log('Current scroll:', currentScroll, 'Saved scroll:', saved.scrollY);
         if (currentScroll > saved.scrollY + 100) {
           console.log('Already scrolled past saved position, skipping restore');
@@ -191,17 +299,39 @@
 
         console.log('✅ Restoring to saved position:', saved.scrollY, 'px', saved.scrollPercent.toFixed(1) + '%', 'saved at:', new Date(saved.timestamp).toLocaleTimeString());
 
-        isRestoring = true;
-        window.scrollTo({
-          top: saved.scrollY,
-          behavior: 'smooth'
-        });
+        const effectiveHeight = isCustomContainer
+          ? container.scrollHeight
+          : Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+        const maxScroll = effectiveHeight - (isCustomContainer ? container.clientHeight : window.innerHeight);
+        const containerHeight = effectiveHeight;
 
-        // Reset restoring flag after scroll completes
-        setTimeout(() => {
-          isRestoring = false;
-          console.log('Restore completed, isRestoring reset to false');
-        }, 500);
+        // Use progressive scroll for paginated/infinite-scroll pages
+        // where the saved position is significantly beyond the current page height
+        if (saved.scrollY > maxScroll + 500) {
+          console.log('📜 Using progressive scroll — target', saved.scrollY, 'beyond current height', containerHeight);
+          isRestoring = true;
+          progressiveScrollActive = true;
+          progressiveScrollToPosition(saved.scrollY);
+        } else {
+          isRestoring = true;
+          if (isCustomContainer) {
+            container.scrollTo({
+              top: saved.scrollY,
+              behavior: 'smooth'
+            });
+          } else {
+            window.scrollTo({
+              top: saved.scrollY,
+              behavior: 'smooth'
+            });
+          }
+
+          // Reset restoring flag after scroll completes
+          setTimeout(() => {
+            isRestoring = false;
+            console.log('Restore completed, isRestoring reset to false');
+          }, 500);
+        }
       });
     } catch (error) {
       console.error('Failed to restore scroll position:', error);
@@ -210,6 +340,12 @@
 
   // Debounced scroll handler
   function handleScroll() {
+    // If progressive scroll is active and user scrolls manually, abort it
+    if (progressiveScrollActive) {
+      console.log('👆 User scrolled manually, aborting progressive scroll');
+      cleanupProgressiveScroll();
+    }
+
     if (isRestoring) return;
 
     if (scrollTimeout) {
@@ -247,7 +383,7 @@
         lastUrl = window.location.href;
         currentUrl = lastUrl;
         setTimeout(() => {
-          if (isArticlePage()) {
+          if (isArticlePage() || isYouTubeChannelPage()) {
             restoreScrollPosition();
           }
         }, 1000); // Wait for new content to load
@@ -269,7 +405,7 @@
         if (window.location.href !== lastUrl) {
           lastUrl = window.location.href;
           currentUrl = lastUrl;
-          if (isArticlePage()) {
+          if (isArticlePage() || isYouTubeChannelPage()) {
             restoreScrollPosition();
           }
         }
@@ -282,7 +418,7 @@
         if (window.location.href !== lastUrl) {
           lastUrl = window.location.href;
           currentUrl = lastUrl;
-          if (isArticlePage()) {
+          if (isArticlePage() || isYouTubeChannelPage()) {
             restoreScrollPosition();
           }
         }
@@ -295,7 +431,7 @@
         if (window.location.href !== lastUrl) {
           lastUrl = window.location.href;
           currentUrl = lastUrl;
-          if (isArticlePage()) {
+          if (isArticlePage() || isYouTubeChannelPage()) {
             restoreScrollPosition();
           }
         }
@@ -310,29 +446,41 @@
 
     console.log('Scroll Saver active for:', document.title);
 
-    // Set up scroll listener
+    // Set up scroll listener on both window and YouTube's container
     window.addEventListener('scroll', handleScroll, { passive: true });
+    const container = getScrollContainer();
+    if (container && container !== document.body) {
+      container.addEventListener('scroll', handleScroll, { passive: true });
+      console.log('Scroll Saver: also listening on custom container:', container.tagName);
+    }
 
     // Save position before page unload
     window.addEventListener('beforeunload', handlePageUnload);
     window.addEventListener('pagehide', handlePageUnload);
 
+    // Capture currentUrl NOW so YouTube SPA URL changes after scheduling
+    // won't cause the storage key to mismatch the saved position.
+    const urlAtTrackStart = currentUrl;
+    const ytChannel = isYouTubeChannelPage();
+
     // Restore position on load (after a delay to allow content to render)
     window.addEventListener('load', () => {
-      setTimeout(restoreScrollPosition, 500);
+      setTimeout(() => restoreScrollPosition(urlAtTrackStart), 500);
     });
 
     // Also try to restore on DOMContentLoaded (for faster pages)
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', () => {
-        setTimeout(restoreScrollPosition, 300);
+        setTimeout(() => restoreScrollPosition(urlAtTrackStart), 300);
       });
     } else {
-      setTimeout(restoreScrollPosition, 300);
+      // For pages that already loaded (common at document_idle):
+      // YouTube channel pages need more time — their video grid
+      // loads asynchronously via API calls after the page shell renders.
+      const delay = ytChannel ? 3000 : 300;
+      console.log('Scheduling restoreScrollPosition in', delay, 'ms, url:', urlAtTrackStart);
+      setTimeout(() => restoreScrollPosition(urlAtTrackStart), delay);
     }
-
-    // Set up URL change observer for SPAs
-    observeUrlChanges();
   }
 
   // Check if page is a social media SPA that loads content dynamically
@@ -343,6 +491,14 @@
            hostname.includes('reddit.com') ||
            hostname.includes('linkedin.com') ||
            hostname.includes('facebook.com');
+  }
+
+  // Check if page is a YouTube channel page
+  function isYouTubeChannelPage() {
+    const hostname = window.location.hostname;
+    const pathname = window.location.pathname;
+    return (hostname.includes('youtube.com') || hostname.includes('youtu.be')) &&
+           pathname.startsWith('/@');
   }
 
   // Retry detection for SPAs
@@ -365,6 +521,12 @@
   function init() {
     console.log('🚀 Extension init called, document.readyState:', document.readyState, 'URL:', window.location.href);
 
+    // Set up URL change observation IMMEDIATELY — before any async round-trips.
+    // YouTube and other SPAs change the URL via pushState during boot.
+    // If we wait, those URL changes slip past our hijack and currentUrl
+    // gets out of sync with the storage key used when the position was saved.
+    observeUrlChanges();
+
     // First check if extension is enabled for this URL
     chrome.runtime.sendMessage(
       { action: 'get_extension_enabled', url: window.location.href },
@@ -374,7 +536,7 @@
           // Default to disabled if error
           proceedWithInit(false);
         } else {
-          const isEnabled = response.enabled === true; // default to false if undefined
+          const isEnabled = response.enabled !== false; // default to true if undefined
           console.log('Extension enabled state for this URL:', isEnabled);
           proceedWithInit(isEnabled);
         }
@@ -405,6 +567,13 @@
       return;
     }
 
+    // For YouTube channel pages, start tracking immediately
+    if (isYouTubeChannelPage()) {
+      console.log('✅ YouTube channel page detected, starting tracking');
+      setupTracking();
+      return;
+    }
+
     // For non-SPA pages, give up immediately
     console.log('❌ Not an article page, skipping reading position tracking');
   }
@@ -419,6 +588,7 @@
   // Expose debug functions to window for manual testing
   window.debugReadingPosition = {
     isArticlePage,
+    isYouTubeChannelPage,
     isTrackingActive: () => isTrackingActive,
     isRestoring: () => isRestoring,
     currentUrl: () => currentUrl,

@@ -4,13 +4,13 @@
 
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-Available-brightgreen?logo=googlechrome&logoColor=white)](https://chrome.google.com/webstore)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.0.0-orange.svg)](#)
+[![Version](https://img.shields.io/badge/Version-1.1.0-orange.svg)](#)
 
 ---
 
 ## ✨ What is Scroll Saver?
 
-**Scroll Saver** is a lightweight Chrome extension that remembers exactly where you left off when reading long articles, blog posts, documentation, or any lengthy web content. When you return to a page, it automatically scrolls you back to your last reading position.
+**Scroll Saver** is a lightweight Chrome extension that remembers exactly where you left off when reading long articles, blog posts, documentation, YouTube channel pages, or any lengthy web content. When you return to a page, it automatically scrolls you back to your last reading position.
 
 ### Why You'll Love It
 
@@ -27,6 +27,7 @@
 |---------|-------------|
 | **Automatic Tracking** | Saves your scroll position as you read (with smart debouncing) |
 | **Smart Detection** | Intelligently identifies article pages using semantic HTML, common patterns, and content analysis |
+| **YouTube Channels** | Supports YouTube channel video lists (`/videos`, `/shorts`, etc.) |
 | **SPA Support** | Works perfectly with React, Vue, and other single-page applications |
 | **Per-Site Control** | Enable/disable tracking per website via the popup toggle |
 | **Privacy Focused** | All data stored locally - nothing leaves your browser |
@@ -146,6 +147,7 @@ scroll-saver/
 │   ├── bookmark_16.png
 │   ├── bookmark_48.png
 │   └── bookmark_128.png
+├── test_scroll_restore.html  # Automation test (YouTube scroll restore)
 ├── package.sh            # Build script
 ├── LICENSE               # MIT License
 └── README.md             # This file
@@ -162,11 +164,36 @@ scroll-saver/
 
 ### Testing
 
+**Automated Test** — reproduces the YouTube scroll-restore bug and validates the fix:
+
+```bash
+# Start a local server and run the test
+python3 -m http.server 8765 &
+# Open http://localhost:8765/test_scroll_restore.html in a browser
+# Or run via Playwright:
+npx playwright open http://localhost:8765/test_scroll_restore.html
+```
+
+The test page (`test_scroll_restore.html`) mimics YouTube's DOM structure:
+- **Body height: 0** — YouTube sets `body { height: 0 }` and places all content in a `<ytd-app style="position: absolute">` element, making `document.body.scrollHeight = 0`
+- **In-memory storage** — uses a mock `chrome.storage` API for isolated testing
+- **Copies of real code** — `restoreScrollPosition()`, `progressiveScrollToPosition()`, `getScrollPosition()` are identical to `content.js`
+- **TDD-style assertions** — verifies the scroll position is correctly saved and restored
+
+**Test Flow:**
+1. Verifies environment mimics YouTube (`body.scrollHeight = 0`, `docEl.scrollHeight > 0`)
+2. Saves scroll position at 1200px
+3. Returns to top of page
+4. Restores position — validates scroll reaches target
+
+**Manual Testing** — load the extension in Chrome and test real pages:
+
 1. Load extension in Chrome (see Manual Installation)
-2. Visit a long article (e.g., Wikipedia, Medium, blog posts)
-3. Scroll down significantly
-4. Refresh the page - position should restore automatically
-5. Click the extension icon to verify saved position
+2. Visit a YouTube channel page (e.g., `https://www.youtube.com/@MrBeast`)
+3. Scroll down significantly — position saves automatically
+4. Click the extension icon, click "Go to Page" on the entry
+5. New tab opens and scrolls to your saved position after ~3s
+6. Also works on: Wikipedia, Medium, blog posts, Twitter/X, etc.
 
 ### Debug Mode
 
@@ -206,6 +233,13 @@ Contributions are welcome! Here's how to help:
 ---
 
 ## 📝 Changelog
+
+### v1.1.0 (2025)
+- **YouTube channel support** — scroll position now restores on YouTube channel pages (`/videos`, `/shorts`, etc.)
+- **Bug fix** — fixed scroll restoration on pages where `body.scrollHeight = 0` (YouTube uses `position: absolute` content with `body { height: 0 }`)
+- **URL capture** — `restoreScrollPosition` now captures the URL at scheduling time to prevent SPA URL change race conditions
+- **Smarter restore timing** — 3s delay for YouTube pages (instead of 300ms) to allow video grid to load
+- **Automation test** — added `test_scroll_restore.html` with mock storage and YouTube-mimicking DOM for TDD-style validation
 
 ### v1.0.0 (2024)
 - Initial release

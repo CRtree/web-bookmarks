@@ -3,7 +3,7 @@
 
 set -e
 
-EXTENSION_NAME="reading-position-recorder"
+EXTENSION_NAME="scroll-saver"
 VERSION=$(grep '"version"' manifest.json | cut -d'"' -f4)
 ZIP_FILE="${EXTENSION_NAME}-v${VERSION}.zip"
 
