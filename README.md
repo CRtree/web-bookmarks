@@ -40,7 +40,7 @@
 
 ### From Chrome Web Store (Recommended)
 
-1. Visit the [Chrome Web Store page](https://chrome.google.com/webstore) (link coming soon)
+1. Visit the [Chrome Web Store page](https://chromewebstore.google.com/detail/plnjpjdjdomfkaendgfccokpbhbcomlo?utm_source=item-share-cb)
 2. Click **"Add to Chrome"**
 3. Grant the requested permissions
 4. Start reading!
