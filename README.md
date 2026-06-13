@@ -4,7 +4,7 @@
 
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-Available-brightgreen?logo=googlechrome&logoColor=white)](https://chrome.google.com/webstore)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.1.0-orange.svg)](#)
+[![Version](https://img.shields.io/badge/Version-1.1.2-orange.svg)](#)
 
 
 ## ✨ What is Scroll Saver?
@@ -77,6 +77,89 @@ scroll-saver/
 └── README.md             # This file
 ```
 
+### Architecture
+
+#### State Machine
+
+```
+     TRACKING        RESTORING        COOLDOWN
+     ────────        ─────────        ────────
+
+  ┌─────────┐    scroll event    ┌───────────┐  reached target  ┌──────────┐
+  │  IDLE   │──────────────────▶ │ RESTORING │────────────────▶ │ COOLDOWN │
+  │ saves   │                    │ saves     │                  │ saves    │
+  │ ALLOWED │                    │ BLOCKED   │                  │ BLOCKED  │
+  └─────────┘                    └───────────┘                  └────┬─────┘
+       ▲                                                            │
+       │                                  10 seconds elapsed        │
+       └────────────────────────────────────────────────────────────┘
+```
+
+Three guards protect against overwriting a valid position:
+
+| Guard | What it blocks | Where |
+|-------|---------------|-------|
+| `isRestoring` | Saves during the scroll animation itself | `handleScroll`, visibility handler |
+| 10s cooldown | Saves after restore finishes but page still loading content | `handleScroll`, visibility handler |
+| min scroll threshold | Saves near the very top of the page (<5% scroll) | `saveScrollPosition` |
+
+#### Restore Flow
+
+```
+  restoreScrollPosition(url)
+       │
+       ▼
+  isRestoring? ──YES──▶ abort
+  isTrackingActive? ──NO──▶ abort
+       │
+       ▼
+  get saved position from chrome.storage.local
+       │
+  ┌────┴────┐
+  │ NO DATA │ YES, HAS DATA
+  ▼         ▼
+ SKIP    target > current page height?
+           ┌─────┴─────┐
+           │ YES       │ NO (smooth path)
+           ▼           ▼
+    PROGRESSIVE        SMOOTH SCROLL
+    (infinite scroll)  window.scrollTo({ behavior:'smooth' })
+           │               │
+    scrollTo(instant)      settle checker (every 200ms, max 15s):
+    dispatch scroll event       wait until currentY ≥ target - 50px
+    wait 1s, repeat                  │
+    (max 40 attempts)         ┌──────┴──────┐
+           │                  │ reached     │ timeout
+           └──────────────────┤ target?     │
+                              └──────┬──────┘
+                                     ▼
+                              isRestoring = false
+                              restoreCompletedAt = Date.now()
+                              ▶ 10s cooldown starts
+```
+
+#### Save Flow
+
+```
+  scroll event               tab hidden              page unload
+       │                    (visibilitychange)      (beforeunload/pagehide)
+       ▼                         │                       │
+  isRestoring? ──YES──▶ IGNORE   │                       │
+       │                         │                       │
+       ▼                         ▼                       ▼
+  within 10s cooldown?      isTrackingActive         isTrackingActive?
+  ──YES──▶ IGNORE           && !isRestoring          ──NO──▶ IGNORE
+       │                    && !in cooldown?              │
+       │                         │                       ▼
+       ▼                         ▼                  ✅ save (no cooldown
+  reset 1s debounce        ✅ save immediately           check — user is
+  after 1s idle:                                         done reading)
+    isTrackingActive? ──NO──▶ IGNORE
+    isRestoring? ──YES──▶ IGNORE
+    in cooldown? ──YES──▶ IGNORE
+    ✅ saveScrollPosition() ──▶ chrome.storage.local
+```
+
 ### Building
 
 ```bash
@@ -85,6 +168,12 @@ scroll-saver/
 ```
 
 ## 📝 Changelog
+
+### v1.1.2 (2026)
+- **Opt-in by default** — extension starts disabled; enable per-site via the popup toggle
+- **Migration** — existing saved sites are automatically carried forward as enabled
+- **Post-restore cooldown** — prevents position overwrites from late-loading content after restore
+- **Scroll settle detection** — waits for smooth scroll to actually finish before re-enabling saves
 
 ### v1.1.0 (2026)
 - **YouTube channel support** — scroll position now restores on YouTube channel pages (`/videos`, `/shorts`, etc.)

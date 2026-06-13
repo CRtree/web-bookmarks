@@ -201,10 +201,10 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       return true;
     }
 
-    chrome.storage.local.get(['disabled_sites'], (result) => {
-      const disabledSites = result.disabled_sites || {};
-      const isEnabled = !disabledSites[normalizedUrl];
-      console.log('get_extension_enabled result:', { isEnabled, disabled: !!disabledSites[normalizedUrl] });
+    chrome.storage.local.get(['enabled_sites'], (result) => {
+      const enabledSites = result.enabled_sites || {};
+      const isEnabled = !!enabledSites[normalizedUrl];
+      console.log('get_extension_enabled result:', { isEnabled, enabled: !!enabledSites[normalizedUrl] });
       sendResponse({ enabled: isEnabled });
     });
     return true;
@@ -222,17 +222,17 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       return true;
     }
 
-    chrome.storage.local.get(['disabled_sites'], (result) => {
-      const disabledSites = result.disabled_sites || {};
+    chrome.storage.local.get(['enabled_sites'], (result) => {
+      const enabledSites = result.enabled_sites || {};
 
       if (enabled) {
-        delete disabledSites[normalizedUrl];
+        enabledSites[normalizedUrl] = true;
       } else {
-        disabledSites[normalizedUrl] = true;
+        delete enabledSites[normalizedUrl];
       }
 
-      chrome.storage.local.set({ disabled_sites: disabledSites }, () => {
-        console.log('set_extension_enabled: updated disabled_sites, count:', Object.keys(disabledSites).length);
+      chrome.storage.local.set({ enabled_sites: enabledSites }, () => {
+        console.log('set_extension_enabled: updated enabled_sites, count:', Object.keys(enabledSites).length);
         sendResponse({ success: true });
       });
     });
@@ -244,7 +244,38 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 chrome.runtime.onInstalled.addListener(() => {
   console.log('Scroll Saver installed');
   cleanupOldEntries();
+  migrateToEnabledSites();
 });
+
+function migrateToEnabledSites() {
+  chrome.storage.local.get(null, (items) => {
+    if (chrome.runtime.lastError) {
+      console.error('Migration error:', chrome.runtime.lastError);
+      return;
+    }
+
+    const enabledSites = items.enabled_sites || {};
+    let migrated = 0;
+
+    for (const key of Object.keys(items)) {
+      if (key.startsWith('reading_position_')) {
+        const normalizedUrl = key.slice('reading_position_'.length);
+        if (!enabledSites[normalizedUrl]) {
+          enabledSites[normalizedUrl] = true;
+          migrated++;
+        }
+      }
+    }
+
+    if (migrated > 0) {
+      chrome.storage.local.set({ enabled_sites: enabledSites }, () => {
+        console.log(`Migration: added ${migrated} sites to enabled_sites`);
+      });
+    } else {
+      console.log('Migration: no new sites to migrate');
+    }
+  });
+}
 
 // Clean up weekly
 if (chrome.alarms) {

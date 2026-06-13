@@ -28,15 +28,16 @@
   let currentUrl = window.location.href;
   let scrollTimeout = null;
   let isRestoring = false;
+  let restoreCompletedAt = 0;
   let lastSavedPosition = 0;
   let isTrackingActive = false;
   let retryCount = 0;
   const MAX_RETRIES = 10;
   const RETRY_DELAY_MS = 1000;
+  const POST_RESTORE_COOLDOWN_MS = 10000;
 
   // Progressive scroll state (for infinite-scroll / paginated pages)
   let progressiveScrollTimer = null;
-  let progressiveScrollActive = false;
 
   // Normalize URL for storage (remove tracking parameters, etc.)
   function normalizeUrl(url) {
@@ -191,14 +192,12 @@
     }
   }
 
-  // Clean up progressive scroll resources
+  // Clean up progressive scroll timer
   function cleanupProgressiveScroll() {
-    progressiveScrollActive = false;
     if (progressiveScrollTimer) {
       clearTimeout(progressiveScrollTimer);
       progressiveScrollTimer = null;
     }
-    isRestoring = false;
   }
 
   // Scroll to a position incrementally, triggering pagination along the way
@@ -213,6 +212,8 @@
       const currentY = isCustomContainer ? container.scrollTop : window.scrollY;
       console.log('Progressive scroll: max attempts reached at', currentY, 'target was', targetScrollY);
       cleanupProgressiveScroll();
+      isRestoring = false;
+      restoreCompletedAt = Date.now();
       return;
     }
 
@@ -242,6 +243,8 @@
     if (currentY >= targetScrollY - 100) {
       console.log('Progressive scroll: reached target at', currentY);
       cleanupProgressiveScroll();
+      isRestoring = false;
+      restoreCompletedAt = Date.now();
       return;
     }
 
@@ -310,7 +313,6 @@
         if (saved.scrollY > maxScroll + 500) {
           console.log('📜 Using progressive scroll — target', saved.scrollY, 'beyond current height', containerHeight);
           isRestoring = true;
-          progressiveScrollActive = true;
           progressiveScrollToPosition(saved.scrollY);
         } else {
           isRestoring = true;
@@ -326,11 +328,21 @@
             });
           }
 
-          // Reset restoring flag after scroll completes
-          setTimeout(() => {
-            isRestoring = false;
-            console.log('Restore completed, isRestoring reset to false');
-          }, 500);
+          // Wait for smooth scroll to actually complete before re-enabling saves
+          let scrollSettleChecks = 0;
+          const MAX_SCROLL_SETTLE_CHECKS = 75; // 15 seconds at 200ms intervals
+          const checkScrollSettled = () => {
+            const currentY = isCustomContainer ? container.scrollTop : window.scrollY;
+            if (currentY >= Math.max(saved.scrollY - 50, 0) || scrollSettleChecks >= MAX_SCROLL_SETTLE_CHECKS) {
+              isRestoring = false;
+              restoreCompletedAt = Date.now();
+              console.log('Restore completed, isRestoring reset to false, cooldown started');
+              return;
+            }
+            scrollSettleChecks++;
+            setTimeout(checkScrollSettled, 200);
+          };
+          setTimeout(checkScrollSettled, 500);
         }
       });
     } catch (error) {
@@ -340,13 +352,8 @@
 
   // Debounced scroll handler
   function handleScroll() {
-    // If progressive scroll is active and user scrolls manually, abort it
-    if (progressiveScrollActive) {
-      console.log('👆 User scrolled manually, aborting progressive scroll');
-      cleanupProgressiveScroll();
-    }
-
     if (isRestoring) return;
+    if (Date.now() - restoreCompletedAt < POST_RESTORE_COOLDOWN_MS) return;
 
     if (scrollTimeout) {
       clearTimeout(scrollTimeout);
@@ -354,6 +361,8 @@
 
     scrollTimeout = setTimeout(() => {
       if (!isTrackingActive) return;
+      if (isRestoring) return;
+      if (Date.now() - restoreCompletedAt < POST_RESTORE_COOLDOWN_MS) return;
 
       const position = getScrollPosition();
       saveScrollPosition(position);
@@ -458,6 +467,14 @@
     window.addEventListener('beforeunload', handlePageUnload);
     window.addEventListener('pagehide', handlePageUnload);
 
+    // Save position on tab switch / app minimize
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'hidden' && isTrackingActive && !isRestoring && Date.now() - restoreCompletedAt >= POST_RESTORE_COOLDOWN_MS) {
+        console.log('Tab hidden, saving scroll position');
+        saveScrollPosition(getScrollPosition());
+      }
+    });
+
     // Capture currentUrl NOW so YouTube SPA URL changes after scheduling
     // won't cause the storage key to mismatch the saved position.
     const urlAtTrackStart = currentUrl;
@@ -536,7 +553,7 @@
           // Default to disabled if error
           proceedWithInit(false);
         } else {
-          const isEnabled = response.enabled !== false; // default to true if undefined
+          const isEnabled = response.enabled === true; // default to disabled if undefined
           console.log('Extension enabled state for this URL:', isEnabled);
           proceedWithInit(isEnabled);
         }

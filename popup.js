@@ -170,7 +170,7 @@ document.addEventListener('DOMContentLoaded', function() {
         }
 
         console.log('Popup: Extension enabled state:', response.enabled);
-        const isEnabled = response.enabled !== false; // default to true if undefined
+        const isEnabled = response.enabled === true; // default to disabled if undefined
 
         // Update toggle checkbox
         if (extensionToggle) {
