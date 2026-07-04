@@ -4,7 +4,7 @@
 
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-Available-brightgreen?logo=googlechrome&logoColor=white)](https://chrome.google.com/webstore)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-1.1.2-orange.svg)](#)
+[![Version](https://img.shields.io/badge/Version-1.2.0-orange.svg)](#)
 
 
 ## ✨ What is Scroll Saver?

@@ -1,0 +1,23 @@
+{
+  "name": "web-bookmarks",
+  "version": "1.0.0",
+  "description": "> Never lose your place again. Automatically save and restore your reading position on any article or long web page.",
+  "main": "background.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CRtree/web-bookmarks.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/CRtree/web-bookmarks/issues"
+  },
+  "homepage": "https://github.com/CRtree/web-bookmarks#readme",
+  "dependencies": {
+    "playwright": "^1.61.1"
+  }
+}

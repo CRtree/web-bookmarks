@@ -54,7 +54,7 @@ function cleanupOldEntries() {
     const toRemove = [];
 
     for (const [key, value] of Object.entries(items)) {
-      if (key.startsWith('reading_position_')) {
+      if (key.startsWith('reading_position_') || key.startsWith('click_video_')) {
         if (value.timestamp && now - value.timestamp > THIRTY_DAYS_MS) {
           toRemove.push(key);
         }
@@ -110,8 +110,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const { url } = request;
     const normalizedUrl = normalizeUrl(url);
     const key = `reading_position_${normalizedUrl}`;
+    const clickKey = `click_video_${normalizedUrl}`;
     console.log('clear_position:', { url, normalizedUrl, key });
-    chrome.storage.local.remove(key, () => {
+    chrome.storage.local.remove([key, clickKey], () => {
       sendResponse({ success: true });
     });
     return true;
@@ -134,7 +135,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         const toRemove = [];
         for (const key of Object.keys(items)) {
-          if (key.startsWith('reading_position_')) {
+          if (key.startsWith('reading_position_') || key.startsWith('click_video_')) {
             toRemove.push(key);
           }
         }

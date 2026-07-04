@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>SPA Navigation Scroll Restore Test</title>
+<style>
+  /* Mimic YouTube: body height=0, all visible content in position:absolute container */
+  body {
+    margin: 0;
+    height: 0;
+    overflow: scroll;
+  }
+  #app {
+    position: absolute;
+    top: 0; left: 0; width: 100%;
+    display: block;
+  }
+  .spacer { height: 1000px; }
+  .marker { background: orange; color: black; padding: 20px; font-size: 24px; text-align: center; }
+  .page-header { background: #333; color: white; padding: 20px; font-size: 20px; position: sticky; top: 0; z-index: 10; }
+
+  #results {
+    position: fixed; top: 0; right: 0;
+    background: #222; color: #0f0; padding: 20px;
+    font: 14px monospace; z-index: 999;
+    max-width: 600px; white-space: pre-wrap;
+  }
+</style>
+</head>
+<body>
+  <div id="app">
+    <!-- Content injected by JS -->
+  </div>
+  <pre id="results">Running tests...</pre>
+
+<script>
+// === Mock chrome API (same as content.js, but we track everything) ===
+const testStorage = {};
+window.chrome = {
+  storage: {
+    local: {
+      get: (keys, cb) => {
+        const result = {};
+        if (keys === null) { Object.assign(result, testStorage); }
+        else { keys.forEach(k => { if (testStorage[k]) result[k] = testStorage[k]; }); }
+        setTimeout(() => cb(result), 0);
+      },
+      set: (obj, cb) => {
+        Object.assign(testStorage, obj);
+        setTimeout(() => cb(), 0);
+      },
+    }
+  },
+  runtime: { id: 'test', lastError: null }
+};
+
+// === Exact copy of content.js logic (with debugging) ===
+const SCROLL_SAVE_DEBOUNCE_MS = 1000;
+let currentUrl = window.location.href;
+let scrollTimeout = null;
+let isRestoring = false;
+let lastSavedPosition = 0;
+let isTrackingActive = false;
+let progressiveScrollTimer = null;
+const MAX_RETRIES = 10;
+let retryCount = 0;
+const RETRY_DELAY_MS = 1000;
+
+// Track what actually happened for assertions
+const debugLog = [];
+function dlog(msg) { debugLog.push(Date.now() + ': ' + msg); console.log(msg); }
+
+function normalizeUrl(url) {
+  try {
+    const u = new URL(url);
+    if (u.hostname.includes('youtube.com') && u.pathname.startsWith('/@')) {
+      u.search = ''; u.hash = '';
+    }
+    return u.toString();
+  } catch(e) { return url; }
+}
+function isExtensionValid() { return true; }
+function getStorageKey(url) { return 'reading_position_' + normalizeUrl(url); }
+function getScrollContainer() { return null; }
+
+function getScrollPosition() {
+  const container = getScrollContainer();
+  let maxScroll, scrollY;
+  if (container && container !== document.body) {
+    scrollY = container.scrollTop;
+    maxScroll = container.scrollHeight - container.clientHeight;
+  } else {
+    scrollY = window.scrollY;
+    const docHeight = Math.max(
+      document.body.scrollHeight,
+      document.documentElement.scrollHeight,
+      document.body.offsetHeight,
+      document.documentElement.offsetHeight
+    );
+    maxScroll = docHeight - window.innerHeight;
+  }
+  let scrollPercent = maxScroll > 0 ? Math.min(100, Math.max(0, (scrollY / maxScroll) * 100)) : 0;
+  return { scrollY, scrollPercent, timestamp: Date.now(), url: currentUrl, title: document.title };
+}
+
+function saveScrollPosition(position) {
+  if (position.scrollY < 100 && position.scrollPercent < 5) return;
+  if (Math.abs(position.scrollY - lastSavedPosition) < 50) return;
+  if (!isExtensionValid()) return;
+  const key = getStorageKey(currentUrl);
+  dlog('SAVE: key=' + key + ' scrollY=' + position.scrollY);
+  chrome.storage.local.set({ [key]: position }, () => { lastSavedPosition = position.scrollY; });
+}
+
+function cleanupProgressiveScroll() {
+  if (progressiveScrollTimer) { clearTimeout(progressiveScrollTimer); progressiveScrollTimer = null; }
+}
+
+// Reset isRestoring
+function finishRestore() {
+  isRestoring = false;
+}
+
+function progressiveScrollToPosition(targetScrollY, attempt) {
+  attempt = attempt || 0;
+  const MAX_ATTEMPTS = 40;
+  const RETRY_DELAY = 100;  // faster for test
+  const container = getScrollContainer();
+  const isCustomContainer = container && container !== document.body;
+
+  if (attempt >= MAX_ATTEMPTS) {
+    const currentY = isCustomContainer ? container.scrollTop : window.scrollY;
+    dlog('PROG_SCROLL: max attempts at ' + currentY + ' target=' + targetScrollY);
+    cleanupProgressiveScroll();
+    finishRestore();
+    return;
+  }
+
+  if (!isExtensionValid()) {
+    cleanupProgressiveScroll();
+    finishRestore();
+    return;
+  }
+
+  const effectiveHeight = isCustomContainer
+    ? container.scrollHeight
+    : Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+  const maxScroll = Math.max(0, effectiveHeight - (isCustomContainer ? container.clientHeight : window.innerHeight));
+  const scrollTarget = Math.min(targetScrollY, maxScroll);
+
+  if (isCustomContainer) {
+    container.scrollTo({ top: scrollTarget, behavior: 'instant' });
+  } else {
+    window.scrollTo({ top: scrollTarget, behavior: 'instant' });
+  }
+
+  const currentY = isCustomContainer ? container.scrollTop : window.scrollY;
+  if (currentY >= targetScrollY - 100) {
+    dlog('PROG_SCROLL: reached target at ' + currentY + ' target=' + targetScrollY);
+    cleanupProgressiveScroll();
+    finishRestore();
+    return;
+  }
+
+  (isCustomContainer ? container : window).dispatchEvent(new Event('scroll', { bubbles: true }));
+  progressiveScrollTimer = setTimeout(() => {
+    progressiveScrollToPosition(targetScrollY, attempt + 1);
+  }, RETRY_DELAY);
+}
+
+function restoreScrollPosition(urlOverride) {
+  const targetUrl = urlOverride || currentUrl;
+  dlog('RESTORE called: targetUrl=' + targetUrl + ' isRestoring=' + isRestoring);
+  if (isRestoring) {
+    dlog('RESTORE: SKIPPED - already restoring');
+    return;
+  }
+  if (!isExtensionValid()) return;
+
+  // Set isRestoring synchronously BEFORE async work — prevents race conditions
+  // where multiple concurrent calls slip through before the first one arms the lock.
+  isRestoring = true;
+  cleanupProgressiveScroll();
+  dlog('RESTORE: lock acquired');
+
+  const key = getStorageKey(targetUrl);
+  chrome.storage.local.get([key], (result) => {
+    const saved = result[key];
+    if (!saved || !saved.scrollY) {
+      dlog('RESTORE: no saved position for key=' + key);
+      finishRestore();
+      return;
+    }
+
+    const container = getScrollContainer();
+    const isCustomContainer = container && container !== document.body;
+    const currentScroll = isCustomContainer ? container.scrollTop : window.scrollY;
+
+    dlog('RESTORE: saved.scrollY=' + saved.scrollY + ' currentScroll=' + currentScroll);
+
+    if (currentScroll > saved.scrollY + 100) {
+      dlog('RESTORE: SKIPPED - already past saved position');
+      finishRestore();
+      return;
+    }
+
+    const effectiveHeight = isCustomContainer
+      ? container.scrollHeight
+      : Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+    const maxScroll = effectiveHeight - (isCustomContainer ? container.clientHeight : window.innerHeight);
+
+    dlog('RESTORE: effectiveHeight=' + effectiveHeight + ' maxScroll=' + maxScroll + ' delta=' + (saved.scrollY - maxScroll));
+
+    if (saved.scrollY > maxScroll + 500) {
+      dlog('RESTORE: using PROGRESSIVE scroll');
+      progressiveScrollToPosition(saved.scrollY);
+    } else {
+      dlog('RESTORE: using SMOOTH scroll (target=' + saved.scrollY + ')');
+      if (isCustomContainer) {
+        container.scrollTo({ top: saved.scrollY, behavior: 'smooth' });
+      } else {
+        window.scrollTo({ top: saved.scrollY, behavior: 'smooth' });
+      }
+      let scrollSettleChecks = 0;
+      const checkScrollSettled = () => {
+        const currentY = isCustomContainer ? container.scrollTop : window.scrollY;
+        if (currentY >= Math.max(saved.scrollY - 50, 0) || scrollSettleChecks >= 75) {
+          dlog('RESTORE: smooth scroll settled at ' + currentY);
+          finishRestore();
+          return;
+        }
+        scrollSettleChecks++;
+        setTimeout(checkScrollSettled, 200);
+      };
+      setTimeout(checkScrollSettled, 500);
+    }
+  });
+}
+
+function handleScroll() {
+  if (isRestoring) { dlog('SCROLL: ignored (isRestoring)'); return; }
+  if (scrollTimeout) clearTimeout(scrollTimeout);
+  scrollTimeout = setTimeout(() => {
+    if (!isTrackingActive) return;
+    if (isRestoring) return;
+    const position = getScrollPosition();
+    saveScrollPosition(position);
+  }, SCROLL_SAVE_DEBOUNCE_MS);
+}
+
+function isArticlePage() { return true; }
+function isYouTubeChannelPage() { return document.location.pathname.startsWith('/@'); }
+
+// === SPA Navigation Simulation ===
+let lastUrl = window.location.href;
+
+// Hook history.pushState
+const originalPushState = history.pushState;
+history.pushState = function(...args) {
+  // Save current position BEFORE navigation (mirrors content.js)
+  if (isTrackingActive && !isRestoring) {
+    dlog('PUSHSTATE: saving position before navigating');
+    saveScrollPosition(getScrollPosition(), currentUrl);
+  }
+
+  originalPushState.apply(this, args);
+  setTimeout(() => {
+    if (window.location.href !== lastUrl) {
+      dlog('PUSHSTATE: ' + lastUrl + ' -> ' + window.location.href);
+      lastUrl = window.location.href;
+      currentUrl = lastUrl;
+      if (isArticlePage() || isYouTubeChannelPage()) {
+        const ytChannel = isYouTubeChannelPage();
+        const restoreDelay = ytChannel ? 2500 : 500;
+        setTimeout(() => restoreScrollPosition(), restoreDelay);
+      }
+    }
+  }, 100);
+};
+
+// Hook history.replaceState
+const originalReplaceState = history.replaceState;
+history.replaceState = function(...args) {
+  if (isTrackingActive && !isRestoring) {
+    saveScrollPosition(getScrollPosition(), currentUrl);
+  }
+
+  originalReplaceState.apply(this, args);
+  setTimeout(() => {
+    if (window.location.href !== lastUrl) {
+      dlog('REPLACESTATE: ' + lastUrl + ' -> ' + window.location.href);
+      lastUrl = window.location.href;
+      currentUrl = lastUrl;
+      if (isArticlePage() || isYouTubeChannelPage()) {
+        const ytChannel = isYouTubeChannelPage();
+        const restoreDelay = ytChannel ? 2500 : 500;
+        setTimeout(() => restoreScrollPosition(), restoreDelay);
+      }
+    }
+  }, 100);
+};
+
+window.addEventListener('popstate', () => {
+  // Save the position BEFORE navigating away (mirrors content.js)
+  if (isTrackingActive && !isRestoring) {
+    dlog('POPSTATE: saving current position before navigating');
+    saveScrollPosition(getScrollPosition(), currentUrl);
+  }
+
+  setTimeout(() => {
+    if (window.location.href !== lastUrl) {
+      dlog('POPSTATE: ' + lastUrl + ' -> ' + window.location.href);
+      lastUrl = window.location.href;
+      currentUrl = lastUrl;
+      if (isArticlePage() || isYouTubeChannelPage()) {
+        const ytChannel = isYouTubeChannelPage();
+        const restoreDelay = ytChannel ? 2500 : 500;
+        setTimeout(() => restoreScrollPosition(), restoreDelay);
+      }
+    }
+  }, 100);
+});
+
+function setupTracking() {
+  if (isTrackingActive) return;
+  isTrackingActive = true;
+  window.addEventListener('scroll', handleScroll, { passive: true });
+  const urlAtTrackStart = currentUrl;
+  const ytChannel = isYouTubeChannelPage();
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', () => {
+      setTimeout(() => restoreScrollPosition(urlAtTrackStart), 300);
+    });
+  } else {
+    const delay = ytChannel ? 3000 : 300;
+    setTimeout(() => restoreScrollPosition(urlAtTrackStart), delay);
+  }
+}
+
+// === PAGE RENDERERS ===
+
+// Render the "List" page (like YouTube channel/home page)
+// Content: tall, lazy-loading (simulates infinite scroll)
+let listContentLoaded = 0;  // how many items loaded
+function renderListPage() {
+  listContentLoaded = 0;
+  const app = document.getElementById('app');
+  app.innerHTML = '<div class="page-header">📋 List Page (YouTube Channel/Home)</div>';
+  loadMoreListItems(5); // 5 initial items, each 1000px = 5000px total
+}
+
+function loadMoreListItems(count) {
+  const app = document.getElementById('app');
+  for (let i = 0; i < count; i++) {
+    listContentLoaded++;
+    const div = document.createElement('div');
+    div.className = 'spacer';
+    div.textContent = 'Video Item #' + listContentLoaded;
+    div.style.border = '1px solid #ccc';
+    div.style.margin = '10px';
+    div.style.display = 'flex';
+    div.style.alignItems = 'center';
+    div.style.justifyContent = 'center';
+    div.style.background = '#f0f0f0';
+    app.appendChild(div);
+  }
+}
+
+// Render the "Video" page (like YouTube watch page)
+function renderVideoPage() {
+  const app = document.getElementById('app');
+  app.innerHTML = `
+    <div class="page-header">🎬 Video Page (YouTube Watch)</div>
+    <div style="background:#000;color:#fff;height:500px;display:flex;align-items:center;justify-content:center;">
+      Video Player (500px)
+    </div>
+    <div class="spacer" style="border:1px solid #ddd;margin:10px;display:flex;align-items:center;justify-content:center;background:#fafafa;">
+      Comments Section (1000px)
+    </div>
+    <div class="spacer" style="border:1px solid #ddd;margin:10px;display:flex;align-items:center;justify-content:center;background:#fafafa;">
+      Recommended Videos (1000px)
+    </div>
+    <div class="spacer" style="border:1px solid #ddd;margin:10px;display:flex;align-items:center;justify-content:center;background:#fafafa;">
+      More Content (1000px)
+    </div>
+  `;
+}
+
+// === TEST RUNNER ===
+
+async function runTests() {
+  const resultsEl = document.getElementById('results');
+  const results = [];
+
+  function logResult(name, pass, detail) {
+    results.push({ name, pass, detail });
+    resultsEl.textContent = results.map(r =>
+      (r.pass ? '✅' : '❌') + ' ' + r.name + ': ' + (r.detail || '')
+    ).join('\n');
+  }
+
+  function logSection(title) {
+    results.push({ name: '--- ' + title + ' ---', pass: true, detail: '' });
+    resultsEl.textContent = results.map(r => {
+      if (r.name.startsWith('---')) return '\n' + r.name;
+      return (r.pass ? '✅' : '❌') + ' ' + r.name + ': ' + (r.detail || '');
+    }).join('\n');
+  }
+
+  // Clear state
+  debugLog.length = 0;
+  Object.keys(testStorage).forEach(k => delete testStorage[k]);
+  isRestoring = false;
+  lastSavedPosition = 0;
+
+  // ==========================================
+  // TEST SCENARIO: SPA Navigation Restore Bug
+  // ==========================================
+  // This reproduces the YouTube scenario:
+  // 1. User scrolls on list page → position saved
+  // 2. User clicks video → SPA navigates to watch page
+  // 3. User scrolls on watch page
+  // 4. User presses Back → SPA navigates back to list page
+  // 5. Bug: restore uses OLD (watch page) DOM dimensions
+
+  logSection('Scenario: YouTube SPA Navigation');
+
+  // Step 1: Set up initial list page with tracking
+  dlog('=== SETUP: List page ===');
+  renderListPage();
+  window.scrollTo(0, 0);
+  currentUrl = window.location.href;
+  lastUrl = currentUrl;
+  setupTracking();
+
+  // Wait for tracking to be active
+  await new Promise(r => setTimeout(r, 100));
+
+  // Step 2: Scroll to position 2000 on list page
+  dlog('=== SCROLL on list page to 2000 ===');
+  window.scrollTo(0, 2000);
+  await new Promise(r => setTimeout(r, 1500)); // wait for debounce save
+
+  // Verify saved
+  const savedKey = getStorageKey(currentUrl);
+  logResult('Scroll position saved for list page',
+    testStorage[savedKey] && testStorage[savedKey].scrollY >= 1900,
+    'saved scrollY=' + (testStorage[savedKey] ? testStorage[savedKey].scrollY : 'N/A'));
+
+  // Step 3: SPA navigate to video page
+  dlog('=== NAVIGATE: pushState to /watch page ===');
+  debugLog.length = 0;
+  history.pushState({}, '', '/watch?v=test123');
+  await new Promise(r => setTimeout(r, 300)); // wait for pushState handler
+
+  // Render video page AFTER pushState (simulates YouTube async render)
+  renderVideoPage();
+  await new Promise(r => setTimeout(r, 200));
+
+  // Step 4: Scroll on video page
+  dlog('=== SCROLL on video page to 500 (reading comments) ===');
+  window.scrollTo(0, 500);
+  await new Promise(r => setTimeout(r, 1500)); // wait for debounce save
+
+  const videoKey = getStorageKey(window.location.href);
+  logResult('Separate scroll position saved for video page',
+    testStorage[videoKey] && testStorage[videoKey].scrollY >= 400,
+    'video scrollY=' + (testStorage[videoKey] ? testStorage[videoKey].scrollY : 'N/A'));
+
+  // Verify list page position NOT overwritten
+  logResult('List page position NOT overwritten by video scroll',
+    testStorage[savedKey] && testStorage[savedKey].scrollY >= 1900,
+    'list scrollY still=' + (testStorage[savedKey] ? testStorage[savedKey].scrollY : 'N/A'));
+
+  // Step 5: GO BACK via popstate
+  dlog('=== GO BACK: popstate to list page ===');
+  debugLog.length = 0;
+  window.scrollTo(0, 0); // browser resets scroll on back
+  history.back();
+  await new Promise(r => setTimeout(r, 200)); // popstate handler fires at 100ms
+
+  // THIS IS THE KEY BUG: at this point (100ms after popstate),
+  // the DOM still shows the VIDEO page (because YouTube hasn't rendered yet).
+  // restoreScrollPosition reads effectiveHeight from the video page DOM,
+  // which is ~3500px (video player 500 + comments 1000 + recs 1000 + more 1000).
+  // This is > 2000 + 500, so SMOOTH scroll is used.
+  // Smooth scroll scrolls to 2000 on the video page.
+  // Then the list page renders, and the scroll position is wrong.
+
+  // Wait for smooth scroll to complete + settle checker
+  await new Promise(r => setTimeout(r, 2000));
+
+  // Now render the list page (simulating YouTube async render)
+  renderListPage();
+  await new Promise(r => setTimeout(r, 500));
+
+  const finalScrollY = window.scrollY;
+  const savedScrollY = testStorage[savedKey] ? testStorage[savedKey].scrollY : -1;
+
+  logResult('SPA back: scroll restored to saved position',
+    Math.abs(finalScrollY - savedScrollY) < 150,
+    'Expected ~' + savedScrollY + ', got ' + finalScrollY);
+
+  // === Diagnostic: Was smooth or progressive scroll used? ===
+  const smoothUsed = debugLog.some(l => l.includes('using SMOOTH scroll'));
+  const progUsed = debugLog.some(l => l.includes('using PROGRESSIVE scroll'));
+  logSection('Diagnostic Info');
+  logResult('Restore strategy (should be progressive for new page)',
+    !smoothUsed || progUsed,
+    'smooth=' + smoothUsed + ' progressive=' + progUsed);
+
+  // Show effectiveHeight at restore time
+  const heightLog = debugLog.find(l => l.includes('effectiveHeight'));
+  if (heightLog) {
+    logResult('Effective height used for restore decision',
+      false,
+      'Height from: ' + heightLog);
+  }
+
+  // ==========================================
+  // TEST 2: What if DOM is re-rendered BEFORE restore?
+  // ==========================================
+  logSection('Scenario: DOM rendered BEFORE restore');
+
+  // Reset
+  debugLog.length = 0;
+  isRestoring = false;
+
+  // Re-navigate to video page and back
+  history.pushState({}, '', '/watch?v=test456');
+  await new Promise(r => setTimeout(r, 200));
+  renderVideoPage();
+  await new Promise(r => setTimeout(r, 200));
+
+  // Now go back but RENDER first
+  history.back();
+  renderListPage(); // render BEFORE popstate handler fires
+  await new Promise(r => setTimeout(r, 100)); // popstate handler fires
+  await new Promise(r => setTimeout(r, 2000)); // wait for restore
+
+  const finalScrollY2 = window.scrollY;
+  logResult('SPA back (DOM ready first): scroll restored correctly',
+    Math.abs(finalScrollY2 - savedScrollY) < 150,
+    'Expected ~' + savedScrollY + ', got ' + finalScrollY2);
+
+  // ==========================================
+  // TEST 3: Progressive scroll recovery via MutationObserver
+  // ==========================================
+  logSection('Scenario: MutationObserver triggers second restore');
+
+  // Reset
+  debugLog.length = 0;
+  isRestoring = false;
+  Object.keys(testStorage).forEach(k => delete testStorage[k]);
+  lastSavedPosition = 0;
+
+  // Setup list page fresh
+  renderListPage();
+  listContentLoaded = 0;
+  loadMoreListItems(10);
+  window.scrollTo(0, 0);
+  currentUrl = window.location.pathname === '/test_spa_navigation.html' ?
+    window.location.href : window.location.origin + window.location.pathname;
+  lastUrl = currentUrl;
+  await new Promise(r => setTimeout(r, 100));
+
+  // Scroll and save
+  window.scrollTo(0, 3000);
+  await new Promise(r => setTimeout(r, 1500));
+  const savedKey3 = getStorageKey(currentUrl);
+  const savedScrollY3 = testStorage[savedKey3] ? testStorage[savedKey3].scrollY : -1;
+  logResult('Saved at scrollY=3000 on list page',
+    savedScrollY3 >= 2900,
+    'saved=' + savedScrollY3);
+
+  // Navigate to video
+  history.pushState({}, '', '/watch?v=test789');
+  await new Promise(r => setTimeout(r, 200));
+  renderVideoPage();
+  window.scrollTo(0, 100);
+  await new Promise(r => setTimeout(r, 500));
+
+  // Go back
+  debugLog.length = 0;
+  history.back();
+
+  // Simulate YouTube async render: first restore fires (wrong), then DOM renders
+  await new Promise(r => setTimeout(r, 200)); // popstate restore at 100ms
+
+  // Now render list page with LESS content than saved position
+  renderListPage();
+  loadMoreListItems(2); // only 2000px, but saved at 3000px
+  await new Promise(r => setTimeout(r, 500));
+
+  // Check: is the scroll position correct?
+  const finalScrollY3 = window.scrollY;
+
+  // Show debug log
+  const dbg = debugLog.join('\n  ');
+  logResult('SPA back (less content loaded): behavior',
+    finalScrollY3 < 5000,
+    'finalScrollY=' + finalScrollY3 + ' saved=' + savedScrollY3 + '\n  Debug:\n  ' + dbg);
+
+  // ==========================================
+  // TEST 4: Save position on fast navigate (before debounce fires)
+  // ==========================================
+  logSection('Scenario: Fast navigate saves before debounce');
+
+  // Reset
+  debugLog.length = 0;
+  isRestoring = false;
+  lastSavedPosition = 0;
+  Object.keys(testStorage).forEach(k => delete testStorage[k]);
+
+  // Setup list page
+  renderListPage();
+  window.scrollTo(0, 0);
+  currentUrl = window.location.origin + window.location.pathname + '?list';
+  lastUrl = currentUrl;
+  await new Promise(r => setTimeout(r, 100));
+
+  // Scroll and immediately navigate (before 1s debounce fires)
+  window.scrollTo(0, 1800);
+  await new Promise(r => setTimeout(r, 100)); // barely any wait
+
+  dlog('=== Navigate via pushState immediately after scroll ===');
+  debugLog.length = 0;
+  history.pushState({}, '', '/watch?v=fastnav');
+  await new Promise(r => setTimeout(r, 300));
+
+  // Check that pushState saved the list page position
+  const listSavedKey = getStorageKey(window.location.origin + window.location.pathname + '?list');
+  const listPos = testStorage[listSavedKey];
+  logResult('Fast navigate: list page position saved by pushState',
+    listPos && listPos.scrollY >= 1700,
+    'saved scrollY=' + (listPos ? listPos.scrollY : 'N/A') +
+    ' (NAVIGATED BEFORE 1s DEBOUNCE)');
+
+  // Navigate back
+  history.back();
+  await new Promise(r => setTimeout(r, 500));
+  renderListPage();
+  await new Promise(r => setTimeout(r, 500));
+
+  const restoredY = window.scrollY;
+  logResult('Fast navigate: position restored after back',
+    Math.abs(restoredY - (listPos ? listPos.scrollY : 1800)) < 200,
+    'Expected ~1800, got ' + restoredY);
+
+  // ==========================================
+  // TEST 5: Video ID refinement on restore
+  // ==========================================
+  logSection('Scenario: Video ID refinement on restore');
+
+  // Reset
+  debugLog.length = 0;
+  isRestoring = false;
+  lastSavedPosition = 0;
+  Object.keys(testStorage).forEach(k => delete testStorage[k]);
+
+  // Set up a list page with video links
+  renderListPage();
+  const app = document.getElementById('app');
+  const testVideoLink = document.createElement('a');
+  testVideoLink.href = '/watch?v=testRefine123';
+  testVideoLink.textContent = 'Test Video Title';
+  testVideoLink.style.display = 'block';
+  testVideoLink.style.padding = '100px';
+  testVideoLink.style.border = '2px solid blue';
+  app.appendChild(testVideoLink);
+
+  // Add spacer below so page is scrollable
+  app.appendChild(document.createElement('div'));
+  app.lastChild.className = 'spacer';
+
+  window.scrollTo(0, 0);
+  currentUrl = window.location.origin + window.location.pathname + '?refine';
+  lastUrl = currentUrl;
+  await new Promise(r => setTimeout(r, 100));
+
+  // Scroll to position the video link
+  window.scrollTo(0, 2000);
+  await new Promise(r => setTimeout(r, 300));
+
+  // Save position with videoId attached
+  const refineKey = getStorageKey(currentUrl);
+  const refinePosition = getScrollPosition();
+  refinePosition.videoId = 'testRefine123';
+  chrome.storage.local.set({ [refineKey]: refinePosition }, () => {});
+
+  logResult('Video refinement: position stored with videoId',
+    testStorage[refineKey] && testStorage[refineKey].videoId === 'testRefine123',
+    'videoId=' + (testStorage[refineKey] ? testStorage[refineKey].videoId : 'N/A'));
+
+  // Restore — should scroll to saved position
+  window.scrollTo(0, 0);
+  isRestoring = false;
+  restoreScrollPosition();
+  await new Promise(r => setTimeout(r, 1000));
+
+  // Verify the video link is visible in viewport
+  const linkRect = testVideoLink.getBoundingClientRect();
+  const videoInViewport = linkRect.top >= -200 && linkRect.top <= window.innerHeight;
+  logResult('Video refinement: test video link is in viewport after restore',
+    videoInViewport,
+    'link top: ' + linkRect.top.toFixed(0) + ', viewport: ' + window.innerHeight);
+
+  // ==========================================
+  // SUMMARY
+  // ==========================================
+  logSection('SUMMARY');
+  const failures = results.filter(r => r.pass === false).length;
+  logResult('Total failures', failures === 0, failures + ' test(s) failed');
+
+  // Append debug log to page
+  const debugDiv = document.createElement('div');
+  debugDiv.style.cssText = 'position:fixed;bottom:0;left:0;right:0;background:#111;color:#0f0;padding:10px;font:12px monospace;max-height:200px;overflow:auto;z-index:998;';
+  debugDiv.textContent = 'Full Debug Log:\n' + debugLog.join('\n');
+  document.body.appendChild(debugDiv);
+}
+
+window.addEventListener('load', () => {
+  currentUrl = window.location.href;
+  lastUrl = currentUrl;
+  setTimeout(runTests, 500);
+});
+</script>
+</body>
+</html>

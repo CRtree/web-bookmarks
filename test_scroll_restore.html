@@ -95,6 +95,11 @@ function cleanupProgressiveScroll() {
   if (progressiveScrollTimer) { clearTimeout(progressiveScrollTimer); progressiveScrollTimer = null; }
 }
 
+// Reset isRestoring — centralized for all restore exit paths
+function finishRestore() {
+  isRestoring = false;
+}
+
 // 🐛 BUG FIXED — no longer aborts self via progressiveScrollActive
 function progressiveScrollToPosition(targetScrollY, attempt) {
   attempt = attempt || 0;
@@ -102,8 +107,8 @@ function progressiveScrollToPosition(targetScrollY, attempt) {
   const RETRY_DELAY = 50;
   const container = getScrollContainer();
   const isCustomContainer = container && container !== document.body;
-  if (attempt >= MAX_ATTEMPTS) { cleanupProgressiveScroll(); isRestoring = false; return; }
-  if (!isExtensionValid()) { cleanupProgressiveScroll(); return; }
+  if (attempt >= MAX_ATTEMPTS) { cleanupProgressiveScroll(); finishRestore(); return; }
+  if (!isExtensionValid()) { cleanupProgressiveScroll(); finishRestore(); return; }
   const effectiveHeight = isCustomContainer
     ? container.scrollHeight
     : Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
@@ -115,7 +120,7 @@ function progressiveScrollToPosition(targetScrollY, attempt) {
     window.scrollTo({ top: scrollTarget });
   }
   const currentY = isCustomContainer ? container.scrollTop : window.scrollY;
-  if (currentY >= targetScrollY - 100) { cleanupProgressiveScroll(); isRestoring = false; return; }
+  if (currentY >= targetScrollY - 100) { cleanupProgressiveScroll(); finishRestore(); return; }
   (isCustomContainer ? container : window).dispatchEvent(new Event('scroll', { bubbles: true }));
   progressiveScrollTimer = setTimeout(() => progressiveScrollToPosition(targetScrollY, attempt + 1), RETRY_DELAY);
 }
@@ -124,24 +129,28 @@ function restoreScrollPosition(urlOverride) {
   const targetUrl = urlOverride || currentUrl;
   if (isRestoring) return;
   if (!isExtensionValid()) return;
+
+  // Set isRestoring synchronously BEFORE async work — prevents race conditions
+  // where multiple concurrent calls slip through before the first one arms the lock.
+  isRestoring = true;
+  cleanupProgressiveScroll();
+
   const key = getStorageKey(targetUrl);
   chrome.storage.local.get([key], (result) => {
     const saved = result[key];
-    if (!saved || !saved.scrollY) return;
+    if (!saved || !saved.scrollY) { finishRestore(); return; }
     const container = getScrollContainer();
     const isCustomContainer = container && container !== document.body;
     const currentScroll = isCustomContainer ? container.scrollTop : window.scrollY;
-    if (currentScroll > saved.scrollY + 100) return;
+    if (currentScroll > saved.scrollY + 100) { finishRestore(); return; }
     const effectiveHeight = isCustomContainer
       ? container.scrollHeight
       : Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
     const maxScroll = effectiveHeight - (isCustomContainer ? container.clientHeight : window.innerHeight);
     const containerHeight = effectiveHeight;
     if (saved.scrollY > maxScroll + 500) {
-      isRestoring = true;
       progressiveScrollToPosition(saved.scrollY);
     } else {
-      isRestoring = true;
       if (isCustomContainer) {
         container.scrollTo({ top: saved.scrollY, behavior: 'smooth' });
       } else {
@@ -151,7 +160,7 @@ function restoreScrollPosition(urlOverride) {
       const checkScrollSettled = () => {
         const currentY = isCustomContainer ? container.scrollTop : window.scrollY;
         if (currentY >= Math.max(saved.scrollY - 50, 0) || scrollSettleChecks >= 75) {
-          isRestoring = false;
+          finishRestore();
           return;
         }
         scrollSettleChecks++;

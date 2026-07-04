@@ -76,13 +76,6 @@ document.addEventListener('DOMContentLoaded', function() {
     return date.toLocaleDateString();
   }
 
-  // Format scroll position
-  function formatPosition(position) {
-    if (!position) return 'No position saved';
-    const percent = position.scrollPercent ? position.scrollPercent.toFixed(1) : '0';
-    return `${percent}%`;
-  }
-
   // Truncate text
   function truncate(text, maxLength) {
     if (text.length <= maxLength) return text;
@@ -129,7 +122,6 @@ document.addEventListener('DOMContentLoaded', function() {
               <p class="title"><strong>${truncate(tab.title || 'Untitled', 40)}</strong></p>
               <p class="url">${truncate(currentTabUrl, 45)}</p>
               <div class="details">
-                <span class="position">${formatPosition(currentTabPosition)}</span>
                 <span class="time">${formatDate(currentTabPosition.timestamp)}</span>
               </div>
             `;
@@ -229,7 +221,6 @@ document.addEventListener('DOMContentLoaded', function() {
           <div class="title" title="${title}">${truncate(title, 40)}</div>
           <div class="url" title="${url}">${truncate(url, 45)}</div>
           <div class="details">
-            <span class="position">${formatPosition(position)}</span>
             <span class="time">${formatDate(position.timestamp)}</span>
           </div>
           <div class="actions">
