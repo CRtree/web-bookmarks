@@ -3,6 +3,37 @@
 (function() {
   'use strict';
 
+  // Forward console logs to background for aggregation
+  const _csOriginalConsole = {
+    log: console.log.bind(console),
+    error: console.error.bind(console),
+    warn: console.warn.bind(console)
+  };
+
+  function _csForward(level, args) {
+    chrome.runtime.sendMessage({
+      action: 'store_log',
+      source: 'content',
+      level: level,
+      message: args.join(' '),
+      url: window.location.href,
+      timestamp: Date.now()
+    });
+  }
+
+  console.log = function(...args) {
+    _csOriginalConsole.log(...args);
+    _csForward('log', args);
+  };
+  console.error = function(...args) {
+    _csOriginalConsole.error(...args);
+    _csForward('error', args);
+  };
+  console.warn = function(...args) {
+    _csOriginalConsole.warn(...args);
+    _csForward('warn', args);
+  };
+
   // Configuration
   const SCROLL_SAVE_DEBOUNCE_MS = 1000;
   const MIN_SCROLL_HEIGHT = 1500; // Minimum page height to consider worth saving
@@ -33,11 +64,9 @@
   let retryCount = 0;
   const MAX_RETRIES = 10;
   const RETRY_DELAY_MS = 1000;
-  const CLICK_SAVE_PROTECT_MS = 500;
-  let lastClickSaveUrl = null;
-  let lastClickSaveExpiry = 0;
   let lastProgressiveHeight = 0;
   let progressiveStallCount = 0;
+  let totalHeightStalls = 0;
   let restoreCompletedAt = 0;
   const POST_RESTORE_COOLDOWN_MS = 3000;
   let clickListenerAttached = false;
@@ -47,6 +76,15 @@
 
   // Progressive scroll state (for infinite-scroll / paginated pages)
   let progressiveScrollTimer = null;
+  let userInterruptedProgressive = false;
+
+  // YouTube video-ID scan state
+  let ytScanTimer = null;
+  let ytScanUserInterrupted = false;
+  let ytScanLastHeight = 0;
+  let ytScanStallCount = 0;
+  let ytScanTotalStalls = 0;
+  let ytScanInterruptHandler = null;
 
   // Normalize URL for storage (remove tracking parameters, etc.)
   function normalizeUrl(url) {
@@ -76,7 +114,7 @@
 
       return urlObj.toString();
     } catch (e) {
-      console.warn('URL normalization failed, using original:', url, e);
+      console.warn('[SS:init] URL normalization failed, using original:', url, e);
       return url;
     }
   }
@@ -85,13 +123,13 @@
   function isExtensionValid() {
     // Check if runtime is still available
     if (!chrome.runtime || !chrome.runtime.id) {
-      console.warn('Extension context invalidated - runtime not available');
+      console.warn('[SS:init] Extension context invalidated - runtime not available');
       return false;
     }
 
     // Check if storage API is available
     if (!chrome.storage || !chrome.storage.local) {
-      console.warn('Extension context invalidated - storage not available');
+      console.warn('[SS:init] Extension context invalidated - storage not available');
       return false;
     }
 
@@ -102,14 +140,6 @@
   function getStorageKey(url) {
     const normalizedUrl = normalizeUrl(url);
     return `reading_position_${normalizedUrl}`;
-  }
-
-  // Secondary key holding the last clicked videoId for a channel URL. Kept
-  // separate from the primary reading_position_ key so scroll saves can't
-  // overwrite the videoId, and so it never shows up as a bookmark in the popup.
-  function getClickVideoKey(url) {
-    const normalizedUrl = normalizeUrl(url);
-    return `click_video_${normalizedUrl}`;
   }
 
   // Check if page is likely an article/long content
@@ -178,38 +208,38 @@
   function saveScrollPosition(position, urlOverride, force) {
     // Don't save if we're at the very top (or minimal scroll)
     if (position.scrollY < 100 && position.scrollPercent < MIN_SCROLL_PERCENT) {
-      console.log('Not saving - at top:', position.scrollY, 'px', position.scrollPercent.toFixed(1) + '%');
+      console.log('[SS:save] Not saving - at top:', position.scrollY, 'px', position.scrollPercent.toFixed(1) + '%');
       return;
     }
 
     // Don't save if we've already saved this position recently
     if (!force && Math.abs(position.scrollY - lastSavedPosition) < 50) {
-      console.log('Not saving - similar to last saved:', position.scrollY, 'vs', lastSavedPosition);
+      console.log('[SS:save] Not saving - similar to last saved:', position.scrollY, 'vs', lastSavedPosition);
       return;
     }
 
     // Check if extension context is still valid
     if (!isExtensionValid()) {
-      console.warn('Extension context invalidated, skipping save');
+      console.warn('[SS:save] Extension context invalidated, skipping save');
       return;
     }
 
     const url = urlOverride || currentUrl;
     const key = getStorageKey(url);
     position.url = url; // Ensure position URL matches the storage key
-    console.log('Saving to storage key:', key);
+    console.log('[SS:save] Saving to storage key:', key);
 
     try {
       chrome.storage.local.set({ [key]: position }, () => {
         if (chrome.runtime.lastError) {
-          console.error('Error saving scroll position:', chrome.runtime.lastError);
+          console.error('[SS:save] Error saving scroll position:', chrome.runtime.lastError);
         } else {
           lastSavedPosition = position.scrollY;
-          console.log('✅ Saved scroll position:', position.scrollY, 'px', position.scrollPercent.toFixed(1) + '%', 'for:', document.title);
+          console.log('[SS:save] ✅ Saved scroll position:', position.scrollY, 'px', position.scrollPercent.toFixed(1) + '%', 'for:', document.title);
         }
       });
     } catch (error) {
-      console.error('Failed to save scroll position:', error);
+      console.error('[SS:save] Failed to save scroll position:', error);
     }
   }
 
@@ -248,39 +278,6 @@
     return link;
   }
 
-  // After position-based restore, try to scroll the exact saved video into view.
-  function refineRestoreToVideo(saved, attempt) {
-    attempt = attempt || 0;
-    const MAX_REFINE_ATTEMPTS = 5;
-
-    if (!saved || !saved.videoId) {
-      console.log('No videoId stored, skipping refinement');
-      return;
-    }
-
-    console.log('🔍 Refining restore to video:', saved.videoId, 'attempt', attempt + 1, '/', MAX_REFINE_ATTEMPTS);
-
-    const links = querySelectorAllDeep(`a[href*="/watch?v=${saved.videoId}"]`);
-    if (!links.length) {
-      if (attempt < MAX_REFINE_ATTEMPTS - 1) {
-        console.log('Video not found yet, retrying in 1s...');
-        setTimeout(() => refineRestoreToVideo(saved, attempt + 1), 1000);
-      } else {
-        console.log('Video not found on page, keeping position-based restore');
-      }
-      return;
-    }
-
-    const link = links[0];
-    const videoContainer = findVideoContainer(link);
-    const rect = videoContainer.getBoundingClientRect();
-    const targetScrollY = Math.max(0, window.scrollY + rect.top - 120);
-
-    window.scrollTo({ top: targetScrollY, behavior: 'instant' });
-    console.log('✅ Refined restore to video', saved.videoId, 'at scrollY:', targetScrollY,
-      '(container top:', rect.top, ', current scroll:', window.scrollY, ')');
-  }
-
   // Clean up progressive scroll timer
   function cleanupProgressiveScroll() {
     if (progressiveScrollTimer) {
@@ -289,26 +286,62 @@
     }
     lastProgressiveHeight = 0;
     progressiveStallCount = 0;
+    totalHeightStalls = 0;
+    detachProgressiveInterrupt();
+  }
+
+  // User interaction during progressive scroll — abort immediately so the
+  // user's manual PageDown/scroll doesn't fight the programmatic scrollTo().
+  let progressiveInterruptHandler = null;
+  function attachProgressiveInterrupt() {
+    if (progressiveInterruptHandler) return;
+    progressiveInterruptHandler = function(e) {
+      // Ignore synthetic (non-trusted) events dispatched by our own code.
+      if (!e.isTrusted) return;
+      userInterruptedProgressive = true;
+      console.log('[SS:prog] Progressive scroll interrupted by user', e.type, 'event');
+    };
+    window.addEventListener('wheel', progressiveInterruptHandler, { passive: true });
+    window.addEventListener('keydown', progressiveInterruptHandler, { passive: true });
+    window.addEventListener('touchstart', progressiveInterruptHandler, { passive: true });
+  }
+  function detachProgressiveInterrupt() {
+    if (!progressiveInterruptHandler) return;
+    window.removeEventListener('wheel', progressiveInterruptHandler);
+    window.removeEventListener('keydown', progressiveInterruptHandler);
+    window.removeEventListener('touchstart', progressiveInterruptHandler);
+    progressiveInterruptHandler = null;
+    userInterruptedProgressive = false;
   }
 
   // Scroll to a position incrementally, triggering pagination along the way
   function progressiveScrollToPosition(targetScrollY, attempt, saved) {
     attempt = attempt || 0;
-    const MAX_ATTEMPTS = 120;
+    const MAX_ATTEMPTS = 60;
+    const MAX_TOTAL_HEIGHT_STALLS = 20;
     const RETRY_DELAY = 1000;
     const container = getScrollContainer();
     const isCustomContainer = container && container !== document.body;
 
     if (attempt >= MAX_ATTEMPTS) {
       const currentY = isCustomContainer ? container.scrollTop : window.scrollY;
-      console.log('Progressive scroll: max attempts reached at', currentY, 'target was', targetScrollY);
+      console.log('[SS:prog] ABORT: max attempts (' + MAX_ATTEMPTS + ') reached at scrollY=' + currentY +
+        ' target=' + targetScrollY + ' totalStalls=' + totalHeightStalls + '/' + MAX_TOTAL_HEIGHT_STALLS);
       cleanupProgressiveScroll();
       finishRestore();
-      refineRestoreToVideo(saved);
       return;
     }
 
     if (!isExtensionValid()) {
+      cleanupProgressiveScroll();
+      finishRestore();
+      return;
+    }
+
+    if (totalHeightStalls >= MAX_TOTAL_HEIGHT_STALLS) {
+      const currentY = isCustomContainer ? container.scrollTop : window.scrollY;
+      console.log('[SS:prog] ABORT: height stalled for ' + totalHeightStalls + '/' + MAX_TOTAL_HEIGHT_STALLS +
+        ' attempts — scrollY=' + currentY + ' target=' + targetScrollY);
       cleanupProgressiveScroll();
       finishRestore();
       return;
@@ -328,15 +361,15 @@
 
     const currentY = isCustomContainer ? container.scrollTop : window.scrollY;
     const containerHeight = effectiveHeight;
-    console.log('Progressive scroll attempt', attempt + 1, '/', MAX_ATTEMPTS,
+    console.log('[SS:prog] Progressive scroll attempt', attempt + 1, '/', MAX_ATTEMPTS,
       'scrolled to', currentY, 'target', targetScrollY,
-      'page height', containerHeight);
+      'page height', containerHeight,
+      'stalls', totalHeightStalls + '/' + MAX_TOTAL_HEIGHT_STALLS);
 
     if (currentY >= targetScrollY - 100) {
-      console.log('Progressive scroll: reached target at', currentY);
+      console.log('[SS:prog] ABORT: reached target at ' + currentY + ' (target=' + targetScrollY + ')');
       cleanupProgressiveScroll();
       finishRestore();
-      refineRestoreToVideo(saved);
       return;
     }
 
@@ -344,36 +377,53 @@
     // synthetic scroll events; a small "wiggle" up and back down often triggers it.
     if (effectiveHeight === lastProgressiveHeight) {
       progressiveStallCount++;
+      totalHeightStalls++;
     } else {
       lastProgressiveHeight = effectiveHeight;
       progressiveStallCount = 0;
     }
 
     if (progressiveStallCount >= 3) {
-      console.log('Progressive scroll: height stalled at', containerHeight,
-        'for', progressiveStallCount, 'attempts, wiggling to trigger lazy load');
-      const wiggleUp = Math.max(0, currentY - 300);
-      if (isCustomContainer) {
-        container.scrollTo({ top: wiggleUp, behavior: 'instant' });
-      } else {
-        window.scrollTo({ top: wiggleUp, behavior: 'instant' });
-      }
-      // Scroll back down immediately so the next iteration doesn't lose progress.
-      (isCustomContainer ? container : window).dispatchEvent(new Event('scroll', { bubbles: true }));
-      setTimeout(() => {
+      // Only wiggle if we haven't hit the actual bottom of the page yet.
+      // When currentY is already at/near maxScroll, wiggling just produces
+      // visual noise (rapid up-down that shows "multiple spinning circles").
+      const atBottom = scrollTarget >= maxScroll - 100;
+      if (!atBottom) {
+        console.log('[SS:prog] Progressive scroll: height stalled at', containerHeight,
+          'for', progressiveStallCount, 'attempts, wiggling to trigger lazy load');
+        const wiggleUp = Math.max(0, currentY - 300);
         if (isCustomContainer) {
-          container.scrollTo({ top: scrollTarget, behavior: 'instant' });
+          container.scrollTo({ top: wiggleUp, behavior: 'instant' });
         } else {
-          window.scrollTo({ top: scrollTarget, behavior: 'instant' });
+          window.scrollTo({ top: wiggleUp, behavior: 'instant' });
         }
         (isCustomContainer ? container : window).dispatchEvent(new Event('scroll', { bubbles: true }));
-      }, 150);
+        setTimeout(() => {
+          if (isCustomContainer) {
+            container.scrollTo({ top: scrollTarget, behavior: 'instant' });
+          } else {
+            window.scrollTo({ top: scrollTarget, behavior: 'instant' });
+          }
+          (isCustomContainer ? container : window).dispatchEvent(new Event('scroll', { bubbles: true }));
+        }, 150);
+      } else {
+        console.log('[SS:prog] Progressive scroll: already at bottom (maxScroll=' + maxScroll +
+          '), skipping wiggle');
+      }
       // Reset stall count so we don't wiggle every single attempt.
       progressiveStallCount = 0;
     }
 
     // Dispatch a scroll event on the right element to trigger lazy loading
     (isCustomContainer ? container : window).dispatchEvent(new Event('scroll', { bubbles: true }));
+
+    // User pressed a key, scrolled, or tapped — abort immediately.
+    if (userInterruptedProgressive) {
+      console.log('[SS:prog] ABORT: user interrupted, aborting (scrollY=' + currentY + ' target=' + targetScrollY + ')');
+      cleanupProgressiveScroll();
+      finishRestore();
+      return;
+    }
 
     // Wait for content to load, then try again
     progressiveScrollTimer = setTimeout(() => {
@@ -385,22 +435,253 @@
   function finishRestore() {
     isRestoring = false;
     restoreCompletedAt = Date.now();
-    console.log('Restore completed, isRestoring reset to false, 3s stability cooldown started');
+    detachProgressiveInterrupt();
+    detachYTScanInterrupt();
+    console.log('[SS:restore] Restore completed, isRestoring reset to false, 3s stability cooldown started');
   }
 
-  // Restore scroll position from storage
+  // ============================================================
+  // YouTube Channel — Video-ID-Only Position Tracking
+  // ============================================================
+
+  function getYouTubeStorageKey(url) {
+    const normalizedUrl = normalizeUrl(url);
+    return `yt_position_${normalizedUrl}`;
+  }
+
+  function saveYouTubePosition(videoId) {
+    if (!videoId || !isExtensionValid()) return;
+    const key = getYouTubeStorageKey(currentUrl);
+    const data = { videoId, timestamp: Date.now() };
+    chrome.storage.local.set({ [key]: data }, () => {
+      if (chrome.runtime.lastError) {
+        console.error('[SS:yt] Error saving YouTube position:', chrome.runtime.lastError);
+      } else {
+        console.log('[SS:yt] ✅ Saved videoId:', videoId);
+      }
+    });
+  }
+
+  function removeYouTubePosition(url) {
+    if (!isExtensionValid()) return;
+    const key = getYouTubeStorageKey(url || currentUrl);
+    chrome.storage.local.remove([key], () => {
+      console.log('[SS:yt] Removed YouTube position:', key);
+    });
+  }
+
+  function findVideoInDOM(videoId) {
+    const links = querySelectorAllDeep(`a[href*="/watch?v=${videoId}"]`);
+    return links.length > 0 ? links[0] : null;
+  }
+
+  function scrollVideoIntoView(link) {
+    const videoContainer = findVideoContainer(link);
+    const rect = videoContainer.getBoundingClientRect();
+    const targetScrollY = Math.max(0, window.scrollY + rect.top - 120);
+    window.scrollTo({ top: targetScrollY, behavior: 'instant' });
+    console.log('[SS:yt] ✅ Scrolled to video at scrollY:', targetScrollY);
+  }
+
+  function showYouTubeToast(message) {
+    const toast = document.createElement('div');
+    toast.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:9999;background:#333;color:#fff;padding:12px 20px;border-radius:8px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:14px;box-shadow:0 4px 12px rgba(0,0,0,0.3);max-width:350px;opacity:0;transition:opacity 0.3s;pointer-events:none;';
+    toast.textContent = message;
+    document.body.appendChild(toast);
+    requestAnimationFrame(() => { toast.style.opacity = '1'; });
+    setTimeout(() => {
+      toast.style.opacity = '0';
+      setTimeout(() => toast.remove(), 500);
+    }, 5000);
+  }
+
+  function notifyVideoNotFound(videoId) {
+    console.warn('[SS:yt] Video not found:', videoId, '(may have been deleted or made private)');
+    showYouTubeToast('Video not found — it may have been deleted or made private.');
+  }
+
+  function cleanupYTScan() {
+    if (ytScanTimer) {
+      clearTimeout(ytScanTimer);
+      ytScanTimer = null;
+    }
+    ytScanLastHeight = 0;
+    ytScanStallCount = 0;
+    ytScanTotalStalls = 0;
+    detachYTScanInterrupt();
+  }
+
+  function attachYTScanInterrupt() {
+    if (ytScanInterruptHandler) return;
+    ytScanInterruptHandler = function(e) {
+      if (!e.isTrusted) return;
+      ytScanUserInterrupted = true;
+      console.log('[SS:yt] Scan interrupted by user', e.type, 'event');
+    };
+    window.addEventListener('wheel', ytScanInterruptHandler, { passive: true });
+    window.addEventListener('keydown', ytScanInterruptHandler, { passive: true });
+    window.addEventListener('touchstart', ytScanInterruptHandler, { passive: true });
+  }
+
+  function detachYTScanInterrupt() {
+    if (!ytScanInterruptHandler) return;
+    window.removeEventListener('wheel', ytScanInterruptHandler);
+    window.removeEventListener('keydown', ytScanInterruptHandler);
+    window.removeEventListener('touchstart', ytScanInterruptHandler);
+    ytScanInterruptHandler = null;
+    ytScanUserInterrupted = false;
+  }
+
+  function progressiveScanForVideo(videoId, attempt, saved) {
+    attempt = attempt || 0;
+    const MAX_ATTEMPTS = 60;
+    const MAX_TOTAL_HEIGHT_STALLS = 20;
+    const RETRY_DELAY = 1000;
+
+    if (attempt >= MAX_ATTEMPTS) {
+      console.log('[SS:yt] ABORT: max attempts reached, video not found');
+      cleanupYTScan();
+      notifyVideoNotFound(videoId);
+      removeYouTubePosition();
+      finishRestore();
+      return;
+    }
+
+    if (!isExtensionValid()) {
+      cleanupYTScan();
+      finishRestore();
+      return;
+    }
+
+    if (ytScanTotalStalls >= MAX_TOTAL_HEIGHT_STALLS) {
+      console.log('[SS:yt] Reached end of channel — video', videoId, 'not found');
+      cleanupYTScan();
+      notifyVideoNotFound(videoId);
+      removeYouTubePosition();
+      finishRestore();
+      return;
+    }
+
+    const videoLink = findVideoInDOM(videoId);
+    if (videoLink) {
+      console.log('[SS:yt] ✅ Found video:', videoId);
+      scrollVideoIntoView(videoLink);
+      cleanupYTScan();
+      finishRestore();
+      return;
+    }
+
+    const docHeight = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+    const maxScroll = Math.max(0, docHeight - window.innerHeight);
+
+    window.scrollTo({ top: maxScroll, behavior: 'instant' });
+    window.dispatchEvent(new Event('scroll', { bubbles: true }));
+
+    const newHeight = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+    if (newHeight === ytScanLastHeight) {
+      ytScanStallCount++;
+      ytScanTotalStalls++;
+    } else {
+      ytScanLastHeight = newHeight;
+      ytScanStallCount = 0;
+    }
+
+    if (ytScanStallCount >= 3 && window.scrollY < maxScroll - 100) {
+      console.log('[SS:yt] Height stalled, wiggling to trigger lazy load');
+      const wiggleUp = Math.max(0, window.scrollY - 300);
+      window.scrollTo({ top: wiggleUp, behavior: 'instant' });
+      window.dispatchEvent(new Event('scroll', { bubbles: true }));
+      setTimeout(() => {
+        window.scrollTo({ top: maxScroll, behavior: 'instant' });
+        window.dispatchEvent(new Event('scroll', { bubbles: true }));
+      }, 150);
+      ytScanStallCount = 0;
+    }
+
+    console.log('[SS:yt] Scan attempt', attempt + 1, '/', MAX_ATTEMPTS,
+      'page height', newHeight,
+      'stalls', ytScanTotalStalls + '/' + MAX_TOTAL_HEIGHT_STALLS);
+
+    if (ytScanUserInterrupted) {
+      console.log('[SS:yt] ABORT: user interrupted scan');
+      cleanupYTScan();
+      finishRestore();
+      return;
+    }
+
+    ytScanTimer = setTimeout(() => {
+      progressiveScanForVideo(videoId, attempt + 1, saved);
+    }, RETRY_DELAY);
+  }
+
+  function restoreYouTubePosition(urlOverride) {
+    const targetUrl = urlOverride || currentUrl;
+    console.log('[SS:yt] 🔄 restoreYouTubePosition called, url:', targetUrl);
+
+    if (isRestoring) {
+      console.log('[SS:yt] Already restoring, skipping');
+      return;
+    }
+
+    if (!isExtensionValid()) {
+      console.warn('[SS:yt] Extension context invalidated, skipping restore');
+      return;
+    }
+
+    isRestoring = true;
+    cleanupYTScan();
+
+    const key = getYouTubeStorageKey(targetUrl);
+    console.log('[SS:yt] Looking for storage key:', key);
+
+    try {
+      chrome.storage.local.get([key], (result) => {
+        if (chrome.runtime.lastError) {
+          console.error('[SS:yt] Error reading YouTube position:', chrome.runtime.lastError);
+          finishRestore();
+          return;
+        }
+
+        const saved = result[key];
+        if (!saved || !saved.videoId) {
+          console.log('[SS:yt] No saved videoId found');
+          finishRestore();
+          return;
+        }
+
+        console.log('[SS:yt] ✅ Found videoId:', saved.videoId, 'saved at:', new Date(saved.timestamp).toLocaleTimeString());
+
+        const videoLink = findVideoInDOM(saved.videoId);
+        if (videoLink) {
+          console.log('[SS:yt] Video already in DOM, scrolling to it');
+          scrollVideoIntoView(videoLink);
+          finishRestore();
+          return;
+        }
+
+        console.log('[SS:yt] Starting progressive scan for video:', saved.videoId);
+        attachYTScanInterrupt();
+        progressiveScanForVideo(saved.videoId, 0, saved);
+      });
+    } catch (error) {
+      console.error('[SS:yt] Failed to restore YouTube position:', error);
+      finishRestore();
+    }
+  }
+
+  // Restore scroll position from storage (articles only)
   // urlOverride: skip the mutable global currentUrl — use this URL for storage key lookup
   function restoreScrollPosition(urlOverride) {
     const targetUrl = urlOverride || currentUrl;
-    console.log('🔄 restoreScrollPosition called, url:', targetUrl, 'isRestoring:', isRestoring);
+    console.log('[SS:restore] 🔄 restoreScrollPosition called, url:', targetUrl, 'isRestoring:', isRestoring);
     if (isRestoring) {
-      console.log('Already restoring, skipping');
+      console.log('[SS:restore] Already restoring, skipping');
       return;
     }
 
     // Check if extension context is still valid
     if (!isExtensionValid()) {
-      console.warn('Extension context invalidated, skipping restore');
+      console.warn('[SS:restore] Extension context invalidated, skipping restore');
       return;
     }
 
@@ -411,43 +692,23 @@
     cleanupProgressiveScroll(); // abort any stale progressive scroll before starting
 
     const key = getStorageKey(targetUrl);
-    const clickKey = getClickVideoKey(targetUrl);
-    console.log('Looking for storage key:', key);
+    console.log('[SS:restore] Looking for storage key:', key);
 
     try {
-      chrome.storage.local.get([key, clickKey], (result) => {
+      chrome.storage.local.get([key], (result) => {
         if (chrome.runtime.lastError) {
-          console.error('Error restoring scroll position:', chrome.runtime.lastError);
+          console.error('[SS:restore] Error restoring scroll position:', chrome.runtime.lastError);
           finishRestore();
           return;
         }
 
-        console.log('Storage result for key', key, ':', result[key] ? 'FOUND' : 'NOT FOUND');
+        console.log('[SS:restore] Storage result for key', key, ':',
+          result[key] ? 'FOUND scrollY=' + result[key].scrollY : 'NOT FOUND');
         const saved = result[key];
         if (!saved || !saved.scrollY) {
-          console.log('No saved position found or invalid data');
+          console.log('[SS:restore] No saved position found or invalid data');
           finishRestore();
           return;
-        }
-
-        // Scroll saves fired during back-navigation re-render can strip the
-        // videoId from the primary save. Recover it from the secondary key ONLY
-        // when the saved position still matches the click-saved position — i.e.
-        // the primary save really is that click, just missing its videoId. If the
-        // user has since scrolled to a different spot (a genuine scroll save far
-        // from the clicked video), we must NOT attach the stale videoId, or
-        // refineRestoreToVideo would yank them back to an old video.
-        const CLICK_VIDEO_MAX_AGE_MS = 60 * 60 * 1000; // 1 hour
-        const CLICK_VIDEO_POS_TOLERANCE = 2000; // px; distinguishes re-render jitter from a real scroll-away
-        const clickSave = result[clickKey];
-        if (!saved.videoId && clickSave && clickSave.videoId &&
-            (Date.now() - clickSave.timestamp < CLICK_VIDEO_MAX_AGE_MS) &&
-            Math.abs(saved.scrollY - clickSave.scrollY) < CLICK_VIDEO_POS_TOLERANCE) {
-          saved.videoId = clickSave.videoId;
-          console.log('♻️ Recovered clicked videoId from secondary key:', saved.videoId);
-        } else if (!saved.videoId && clickSave && clickSave.videoId) {
-          console.log('Skipping stale click videoId — saved position',
-            saved.scrollY, 'differs from click position', clickSave.scrollY);
         }
 
         // Determine current scroll relative to the saved position. On YouTube
@@ -458,13 +719,13 @@
         const container = getScrollContainer();
         const isCustomContainer = container && container !== document.body;
         const currentScroll = isCustomContainer ? container.scrollTop : window.scrollY;
-        console.log('Current scroll:', currentScroll, 'Saved scroll:', saved.scrollY);
+        console.log('[SS:restore] Current scroll:', currentScroll, 'Saved scroll:', saved.scrollY);
         const startedAbove = currentScroll > saved.scrollY + 50;
         if (startedAbove) {
-          console.log('Scrolled past saved position, scrolling up to restore');
+          console.log('[SS:restore] Scrolled past saved position, scrolling up to restore');
         }
 
-        console.log('✅ Restoring to saved position:', saved.scrollY, 'px', saved.scrollPercent.toFixed(1) + '%', 'saved at:', new Date(saved.timestamp).toLocaleTimeString());
+        console.log('[SS:restore] ✅ Restoring to saved position:', saved.scrollY, 'px', saved.scrollPercent.toFixed(1) + '%', 'saved at:', new Date(saved.timestamp).toLocaleTimeString());
 
         const effectiveHeight = isCustomContainer
           ? container.scrollHeight
@@ -475,7 +736,11 @@
         // Use progressive scroll for paginated/infinite-scroll pages
         // where the saved position is significantly beyond the current page height
         if (saved.scrollY > maxScroll + 500) {
-          console.log('📜 Using progressive scroll — target', saved.scrollY, 'beyond current height', containerHeight);
+          console.log('[SS:prog] Progressive scroll start — target=' + saved.scrollY +
+            ' currentHeight=' + containerHeight + ' gap=' + (saved.scrollY - containerHeight) +
+            ' max=' + maxScroll + ' videoId=' + (saved.videoId || 'none') +
+            ' maxAttempts=' + 60 + ' maxStalls=' + 20);
+          attachProgressiveInterrupt();
           progressiveScrollToPosition(saved.scrollY, 0, saved);
         } else {
           if (isCustomContainer) {
@@ -503,7 +768,6 @@
               : currentY >= Math.max(saved.scrollY - 50, 0);
             if (reached || scrollSettleChecks >= MAX_SCROLL_SETTLE_CHECKS) {
               finishRestore();
-              refineRestoreToVideo(saved);
               return;
             }
             scrollSettleChecks++;
@@ -513,13 +777,14 @@
         }
       });
     } catch (error) {
-      console.error('Failed to restore scroll position:', error);
+      console.error('[SS:restore] Failed to restore scroll position:', error);
       finishRestore();
     }
   }
 
   // Debounced scroll handler
   function handleScroll() {
+    if (isYouTubeChannelPage()) return;
     if (isRestoring) return;
     if (Date.now() - restoreCompletedAt < POST_RESTORE_COOLDOWN_MS) return;
 
@@ -543,13 +808,14 @@
 
   // Handle page unload to save final position
   function handlePageUnload() {
-    console.log('📝 Page unload event fired, isTrackingActive:', isTrackingActive);
+    if (isYouTubeChannelPage()) return;
+    console.log('[SS:save] 📝 Page unload event fired, isTrackingActive:', isTrackingActive);
     if (!isTrackingActive) {
-      console.log('Not tracking active, skipping save on unload');
+      console.log('[SS:save] Not tracking active, skipping save on unload');
       return;
     }
 
-    console.log('Saving final position on page unload');
+    console.log('[SS:save] Saving final position on page unload');
     const position = getScrollPosition();
     saveScrollPosition(position);
   }
@@ -558,7 +824,7 @@
   // Uses capture phase so we run BEFORE YouTube's click handler SPA-navigates away.
   function handleVideoClick(event) {
     if (!isYouTubeChannelPage()) {
-      console.log('CLICK: ignored - not a YouTube channel page');
+      console.log('[SS:click] CLICK: ignored - not a YouTube channel page');
       return;
     }
 
@@ -570,7 +836,7 @@
 
     const link = event.target.closest('a');
     if (!link) {
-      console.log('CLICK: ignored - no <a> ancestor');
+      console.log('[SS:click] CLICK: ignored - no <a> ancestor');
       return;
     }
 
@@ -583,7 +849,7 @@
       return;
     }
 
-    console.log('CLICK: detected link href:', href, '(' + event.type + ')');
+    console.log('[SS:click] CLICK: detected link href:', href, '(' + event.type + ')');
 
     // Accept both relative (/watch?v=...) and absolute YouTube watch links.
     let isVideoLink = false;
@@ -599,7 +865,7 @@
     }
 
     if (!isVideoLink) {
-      console.log('CLICK: ignored - not a /watch?v= link');
+      console.log('[SS:click] CLICK: ignored - not a /watch?v= link');
       return;
     }
 
@@ -607,72 +873,15 @@
     lastHandledVideoHref = href;
     lastHandledVideoTime = Date.now();
 
-    // Extract the video ID so we can refine the restore later.
+    // Extract the video ID so we can restore to this video later.
     const videoIdMatch = href.match(/[?&]v=([^&]+)/);
     const videoId = videoIdMatch ? videoIdMatch[1] : null;
 
-    // Find the video card container by walking up from the clicked link.
-    // Use findVideoContainer which starts at the link itself — unlike
-    // composedPath().find(), it never picks a far-ancestor ytd-rich-item-renderer
-    // like the channel header.
-    const videoContainer = findVideoContainer(link);
+    console.log('[SS:click] 🎬 Video link clicked:', href, 'videoId:', videoId);
 
-    const rect = videoContainer.getBoundingClientRect();
-    const videoTop = rect.top + window.scrollY;
-    const viewportTopMargin = 120; // leave space above the video when restored
-    const targetScrollY = Math.max(0, videoTop - viewportTopMargin);
-
-    const docHeight = Math.max(
-      document.body.scrollHeight,
-      document.documentElement.scrollHeight,
-      document.body.offsetHeight,
-      document.documentElement.offsetHeight
-    );
-    const maxScroll = Math.max(0, docHeight - window.innerHeight);
-    const targetScrollPercent = maxScroll > 0
-      ? Math.min(100, Math.max(0, (targetScrollY / maxScroll) * 100))
-      : 0;
-
-    console.log('🎬 Video link clicked:', href);
-    console.log('Saving channel scroll position aligned to clicked video top:', targetScrollY,
-      '(video top:', videoTop, ', margin:', viewportTopMargin, ')');
-
-    // Cancel any pending debounced scroll save so it can't overwrite this click save
-    // after we navigate to the video page.
-    if (scrollTimeout) {
-      clearTimeout(scrollTimeout);
-      scrollTimeout = null;
-      console.log('Cancelled pending scroll debounce');
-    }
-
-    saveScrollPosition({
-      scrollY: targetScrollY,
-      scrollPercent: targetScrollPercent,
-      timestamp: Date.now(),
-      url: currentUrl,
-      title: document.title,
-      videoId: videoId
-    }, currentUrl, true);
-
-    // Persist the clicked videoId under a SEPARATE key so that scroll-save
-    // events fired during back-navigation re-render (which carry no videoId)
-    // can't overwrite it in the primary key. restoreScrollPosition reads this
-    // back so refineRestoreToVideo can always re-align to the clicked video.
-    if (videoId && isExtensionValid()) {
-      const clickKey = getClickVideoKey(currentUrl);
-      try {
-        chrome.storage.local.set({
-          [clickKey]: { videoId: videoId, scrollY: targetScrollY, timestamp: Date.now() }
-        });
-      } catch (error) {
-        console.error('Failed to save clicked videoId:', error);
-      }
-    }
-
-    // Mark this URL as recently click-saved so pushState/replaceState don't
-    // overwrite it while scroll momentum is still moving the page.
-    lastClickSaveUrl = currentUrl;
-    lastClickSaveExpiry = Date.now() + CLICK_SAVE_PROTECT_MS;
+    // Save videoId only — no scroll position. On restore, we scan the channel
+    // for this video.
+    saveYouTubePosition(videoId);
   }
 
   // Manage click-to-save listener lifecycle: attach only when on a YouTube channel page.
@@ -684,14 +893,14 @@
         document.addEventListener('pointerdown', handleVideoClick, true);
         document.addEventListener('click', handleVideoClick, true);
         clickListenerAttached = true;
-        console.log('🖱️ Click interception attached for YouTube channel page');
+        console.log('[SS:click] 🖱️ Click interception attached for YouTube channel page');
       }
     } else {
       if (clickListenerAttached) {
         document.removeEventListener('pointerdown', handleVideoClick, true);
         document.removeEventListener('click', handleVideoClick, true);
         clickListenerAttached = false;
-        console.log('🖱️ Click interception removed (not a YouTube channel page)');
+        console.log('[SS:click] 🖱️ Click interception removed (not a YouTube channel page)');
       }
     }
   }
@@ -709,7 +918,9 @@
         const ytChannel = isYouTubeChannelPage();
         const restoreDelay = ytChannel ? 2500 : 1000;
         setTimeout(() => {
-          if (isArticlePage() || isYouTubeChannelPage()) {
+          if (ytChannel) {
+            restoreYouTubePosition();
+          } else if (isArticlePage()) {
             restoreScrollPosition();
           }
         }, restoreDelay);
@@ -726,24 +937,17 @@
     const originalReplaceState = history.replaceState;
 
     history.pushState = function(...args) {
-      // Cancel any pending debounced scroll save before navigating away.
       if (scrollTimeout) {
         clearTimeout(scrollTimeout);
         scrollTimeout = null;
       }
 
-      // If a click save just happened for this URL, don't overwrite it while
-      // scroll momentum is still moving the page.
-      const recentlyClickSaved = currentUrl === lastClickSaveUrl && Date.now() < lastClickSaveExpiry;
-      if (recentlyClickSaved) {
-        console.log('pushState save skipped: protected by recent click save');
-      }
+      const leavingUrl = currentUrl;
 
-      // Save current position for the URL we are LEAVING before the URL changes.
-      // (visibilitychange does NOT fire during SPA navigation — the tab stays visible.)
-      if (isTrackingActive && !isRestoring && !recentlyClickSaved) {
+      // Save current position for the URL we are LEAVING (articles only).
+      if (isTrackingActive && !isRestoring && !isYouTubeChannelUrl(leavingUrl)) {
         const position = getScrollPosition();
-        saveScrollPosition(position, currentUrl);
+        saveScrollPosition(position, leavingUrl);
       }
 
       originalPushState.apply(this, args);
@@ -752,33 +956,31 @@
           lastUrl = window.location.href;
           currentUrl = lastUrl;
           ensureClickListener();
-          if (isArticlePage() || isYouTubeChannelPage()) {
-            const ytChannel = isYouTubeChannelPage();
-            const restoreDelay = ytChannel ? 2500 : 500;
-            setTimeout(() => restoreScrollPosition(), restoreDelay);
-          }
+          const ytChannel = isYouTubeChannelPage();
+          const restoreDelay = ytChannel ? 2500 : 500;
+          setTimeout(() => {
+            if (ytChannel) {
+              restoreYouTubePosition();
+            } else if (isArticlePage()) {
+              restoreScrollPosition();
+            }
+          }, restoreDelay);
         }
       }, 100);
     };
 
     history.replaceState = function(...args) {
-      // Cancel any pending debounced scroll save before navigating away.
       if (scrollTimeout) {
         clearTimeout(scrollTimeout);
         scrollTimeout = null;
       }
 
-      // If a click save just happened for this URL, don't overwrite it while
-      // scroll momentum is still moving the page.
-      const recentlyClickSaved = currentUrl === lastClickSaveUrl && Date.now() < lastClickSaveExpiry;
-      if (recentlyClickSaved) {
-        console.log('replaceState save skipped: protected by recent click save');
-      }
+      const leavingUrl = currentUrl;
 
-      // Save current position for the URL we are LEAVING before the URL changes.
-      if (isTrackingActive && !isRestoring && !recentlyClickSaved) {
+      // Save current position for the URL we are LEAVING (articles only).
+      if (isTrackingActive && !isRestoring && !isYouTubeChannelUrl(leavingUrl)) {
         const position = getScrollPosition();
-        saveScrollPosition(position, currentUrl);
+        saveScrollPosition(position, leavingUrl);
       }
 
       originalReplaceState.apply(this, args);
@@ -787,36 +989,32 @@
           lastUrl = window.location.href;
           currentUrl = lastUrl;
           ensureClickListener();
-          if (isArticlePage() || isYouTubeChannelPage()) {
-            const ytChannel = isYouTubeChannelPage();
-            const restoreDelay = ytChannel ? 2500 : 500;
-            setTimeout(() => restoreScrollPosition(), restoreDelay);
-          }
+          const ytChannel = isYouTubeChannelPage();
+          const restoreDelay = ytChannel ? 2500 : 500;
+          setTimeout(() => {
+            if (ytChannel) {
+              restoreYouTubePosition();
+            } else if (isArticlePage()) {
+              restoreScrollPosition();
+            }
+          }, restoreDelay);
         }
       }, 100);
     };
 
     // Listen to popstate (back/forward navigation)
     window.addEventListener('popstate', () => {
-      // Cancel any pending debounced scroll save before navigating away.
       if (scrollTimeout) {
         clearTimeout(scrollTimeout);
         scrollTimeout = null;
       }
 
-      // If a click save just happened for this URL, don't overwrite it while
-      // scroll momentum is still moving the page.
-      const recentlyClickSaved = currentUrl === lastClickSaveUrl && Date.now() < lastClickSaveExpiry;
-      if (recentlyClickSaved) {
-        console.log('popstate save skipped: protected by recent click save');
-      }
+      const leavingUrl = currentUrl;
 
-      // Save the position for the page we are LEAVING.
-      // popstate fires AFTER the URL has changed, but currentUrl still
-      // holds the URL of the page we're navigating away from.
-      if (isTrackingActive && !isRestoring && !recentlyClickSaved) {
+      // Save the position for the page we are LEAVING (articles only).
+      if (isTrackingActive && !isRestoring && !isYouTubeChannelUrl(leavingUrl)) {
         const position = getScrollPosition();
-        saveScrollPosition(position, currentUrl);
+        saveScrollPosition(position, leavingUrl);
       }
 
       setTimeout(() => {
@@ -824,29 +1022,33 @@
           lastUrl = window.location.href;
           currentUrl = lastUrl;
           ensureClickListener();
-          if (isArticlePage() || isYouTubeChannelPage()) {
-            const ytChannel = isYouTubeChannelPage();
-            const restoreDelay = ytChannel ? 2500 : 500;
-            setTimeout(() => restoreScrollPosition(), restoreDelay);
-          }
+          const ytChannel = isYouTubeChannelPage();
+          const restoreDelay = ytChannel ? 2500 : 500;
+          setTimeout(() => {
+            if (ytChannel) {
+              restoreYouTubePosition();
+            } else if (isArticlePage()) {
+              restoreScrollPosition();
+            }
+          }, restoreDelay);
         }
       }, 100);
     });
   }
 
-  // Set up tracking once article is detected
+  // Set up tracking for article pages (scroll-position-based)
   function setupTracking() {
     if (isTrackingActive) return;
     isTrackingActive = true;
 
-    console.log('Scroll Saver active for:', document.title);
+    console.log('[SS:init] Scroll Saver active for (article):', document.title);
 
-    // Set up scroll listener on both window and YouTube's container
+    // Set up scroll listener on both window and custom container
     window.addEventListener('scroll', handleScroll, { passive: true });
     const container = getScrollContainer();
     if (container && container !== document.body) {
       container.addEventListener('scroll', handleScroll, { passive: true });
-      console.log('Scroll Saver: also listening on custom container:', container.tagName);
+      console.log('[SS:init] Scroll Saver: also listening on custom container:', container.tagName);
     }
 
     // Save position before page unload
@@ -857,36 +1059,52 @@
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'hidden' && isTrackingActive && !isRestoring
           && Date.now() - restoreCompletedAt >= POST_RESTORE_COOLDOWN_MS) {
-        console.log('Tab hidden, saving scroll position');
+        console.log('[SS:save] Tab hidden, saving scroll position');
         saveScrollPosition(getScrollPosition());
       }
     });
 
-    // Manage click-to-save listener: attach only on YouTube channel pages.
+    // Manage click-to-save listener lifecycle (no-op for articles)
     ensureClickListener();
 
-    // Capture currentUrl NOW so YouTube SPA URL changes after scheduling
-    // won't cause the storage key to mismatch the saved position.
     const urlAtTrackStart = currentUrl;
-    const ytChannel = isYouTubeChannelPage();
 
     // Restore position on load (after a delay to allow content to render)
     window.addEventListener('load', () => {
       setTimeout(() => restoreScrollPosition(urlAtTrackStart), 500);
     });
 
-    // Also try to restore on DOMContentLoaded (for faster pages)
     if (document.readyState === 'loading') {
       document.addEventListener('DOMContentLoaded', () => {
         setTimeout(() => restoreScrollPosition(urlAtTrackStart), 300);
       });
     } else {
-      // For pages that already loaded (common at document_idle):
-      // YouTube channel pages need more time — their video grid
-      // loads asynchronously via API calls after the page shell renders.
-      const delay = ytChannel ? 3000 : 300;
-      console.log('Scheduling restoreScrollPosition in', delay, 'ms, url:', urlAtTrackStart);
-      setTimeout(() => restoreScrollPosition(urlAtTrackStart), delay);
+      setTimeout(() => restoreScrollPosition(urlAtTrackStart), 300);
+    }
+  }
+
+  // Set up tracking for YouTube channel pages (video-ID-only)
+  function setupYouTubeTracking() {
+    if (isTrackingActive) return;
+    isTrackingActive = true;
+
+    console.log('[SS:init] Scroll Saver active for (YouTube channel):', document.title);
+
+    // Click-to-save listener: intercept video clicks to save videoId
+    ensureClickListener();
+
+    const urlAtTrackStart = currentUrl;
+
+    // YouTube channel pages need time for their video grid to render
+    const delay = 3000;
+    console.log('[SS:init] Scheduling restoreYouTubePosition in', delay, 'ms, url:', urlAtTrackStart);
+
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', () => {
+        setTimeout(() => restoreYouTubePosition(urlAtTrackStart), delay);
+      });
+    } else {
+      setTimeout(() => restoreYouTubePosition(urlAtTrackStart), delay);
     }
   }
 
@@ -908,15 +1126,26 @@
            pathname.startsWith('/@');
   }
 
+  // Check if a specific URL is a YouTube channel (uses URL param, not window.location)
+  function isYouTubeChannelUrl(url) {
+    try {
+      const u = new URL(url, window.location.origin);
+      return (u.hostname.includes('youtube.com') || u.hostname.includes('youtu.be')) &&
+             u.pathname.startsWith('/@');
+    } catch (e) {
+      return false;
+    }
+  }
+
   // Retry detection for SPAs
   function retryDetection() {
     if (isTrackingActive || retryCount >= MAX_RETRIES) return;
 
     retryCount++;
-    console.log(`Retry ${retryCount}/${MAX_RETRIES} for article detection...`);
+    console.log('[SS:init] Retry ' + retryCount + '/' + MAX_RETRIES + ' for article detection...');
 
     if (isArticlePage()) {
-      console.log('Article detected on retry, starting tracking');
+      console.log('[SS:init] Article detected on retry, starting tracking');
       setupTracking();
     } else {
       // Schedule next retry
@@ -926,7 +1155,7 @@
 
   // Initialize with retry logic for SPAs
   function init() {
-    console.log('🚀 Extension init called, document.readyState:', document.readyState, 'URL:', window.location.href);
+    console.log('[SS:init] 🚀 Extension init called, document.readyState:', document.readyState, 'URL:', window.location.href);
 
     // Set up URL change observation IMMEDIATELY — before any async round-trips.
     // YouTube and other SPAs change the URL via pushState during boot.
@@ -939,12 +1168,12 @@
       { action: 'get_extension_enabled', url: window.location.href },
       function(response) {
         if (chrome.runtime.lastError) {
-          console.error('Error checking extension enabled state:', chrome.runtime.lastError);
+          console.error('[SS:init] Error checking extension enabled state:', chrome.runtime.lastError);
           // Default to disabled if error
           proceedWithInit(false);
         } else {
           const isEnabled = response.enabled === true; // default to disabled if undefined
-          console.log('Extension enabled state for this URL:', isEnabled);
+          console.log('[SS:init] Extension enabled state for this URL:', isEnabled);
           proceedWithInit(isEnabled);
         }
       }
@@ -954,35 +1183,35 @@
   // Proceed with initialization based on extension enabled state
   function proceedWithInit(isExtensionEnabled) {
     if (!isExtensionEnabled) {
-      console.log('❌ Extension disabled for this URL, skipping reading position tracking');
+      console.log('[SS:init] ❌ Extension disabled for this URL, skipping reading position tracking');
+      return;
+    }
+
+    // YouTube channel pages — video-ID-only tracking (separate from articles)
+    if (isYouTubeChannelPage()) {
+      console.log('[SS:init] ✅ YouTube channel page detected, starting video-ID tracking');
+      setupYouTubeTracking();
       return;
     }
 
     // Check if this page is worth tracking
     if (isArticlePage()) {
-      console.log('✅ Article detected immediately, starting tracking');
+      console.log('[SS:init] ✅ Article detected immediately, starting tracking');
       setupTracking();
       return;
     }
 
-    console.log('Not an article page yet, checking if SPA...');
+    console.log('[SS:init] Not an article page yet, checking if SPA...');
 
     // For social media SPAs, retry detection
     if (isSocialMediaSPA()) {
-      console.log('🔍 Social media SPA detected, will retry article detection');
+      console.log('[SS:init] 🔍 Social media SPA detected, will retry article detection');
       retryDetection();
       return;
     }
 
-    // For YouTube channel pages, start tracking immediately
-    if (isYouTubeChannelPage()) {
-      console.log('✅ YouTube channel page detected, starting tracking');
-      setupTracking();
-      return;
-    }
-
     // For non-SPA pages, give up immediately
-    console.log('❌ Not an article page, skipping reading position tracking');
+    console.log('[SS:init] ❌ Not an article page, skipping reading position tracking');
   }
 
   // Start the extension
@@ -1001,28 +1230,38 @@
     currentUrl: () => currentUrl,
     retryCount: () => retryCount,
     getStorageKey,
+    getYouTubeStorageKey,
     normalizeUrl,
     forceRetry: retryDetection,
     checkStorage: () => {
       if (!isExtensionValid()) {
-        console.warn('Extension context invalidated, cannot check storage');
+        console.warn('[SS:debug] Extension context invalidated, cannot check storage');
         return;
       }
       const key = getStorageKey(currentUrl);
-      chrome.storage.local.get([key], (result) => {
-        console.log('Storage check for key', key, ':', result[key] ? 'FOUND' : 'NOT FOUND');
-        if (result[key]) {
-          console.log('Position:', result[key]);
-        }
+      const ytKey = getYouTubeStorageKey(currentUrl);
+      chrome.storage.local.get([key, ytKey], (result) => {
+        console.log('[SS:debug] Storage check for key', key, ':', result[key] ? 'FOUND' : 'NOT FOUND');
+        if (result[key]) { console.log('[SS:debug] Position:', result[key]); }
+        console.log('[SS:debug] YouTube storage check for key', ytKey, ':', result[ytKey] ? 'FOUND' : 'NOT FOUND');
+        if (result[ytKey]) { console.log('[SS:debug] YouTube Position:', result[ytKey]); }
       });
     },
-    forceRestore: restoreScrollPosition,
+    forceRestore: () => {
+      if (isYouTubeChannelPage()) {
+        restoreYouTubePosition();
+      } else {
+        restoreScrollPosition();
+      }
+    },
+    forceYouTubeRestore: restoreYouTubePosition,
     forceSave: () => {
+      if (isYouTubeChannelPage()) return;
       const position = getScrollPosition();
       saveScrollPosition(position);
     }
   };
 
-  console.log('📖 Scroll Saver loaded. Debug: window.debugReadingPosition');
+  console.log('[SS:init] 📖 Scroll Saver loaded. Debug: window.debugReadingPosition');
 
 })();

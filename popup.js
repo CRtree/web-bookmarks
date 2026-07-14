@@ -1,4 +1,37 @@
 // Scroll Saver - Popup Script
+
+// Forward console logs to background for aggregation
+(function() {
+  const _original = {
+    log: console.log.bind(console),
+    error: console.error.bind(console),
+    warn: console.warn.bind(console)
+  };
+
+  function forward(level, args) {
+    chrome.runtime.sendMessage({
+      action: 'store_log',
+      source: 'popup',
+      level: level,
+      message: args.join(' '),
+      timestamp: Date.now()
+    });
+  }
+
+  console.log = function(...args) {
+    _original.log(...args);
+    forward('log', args);
+  };
+  console.error = function(...args) {
+    _original.error(...args);
+    forward('error', args);
+  };
+  console.warn = function(...args) {
+    _original.warn(...args);
+    forward('warn', args);
+  };
+})();
+
 console.log('Popup script loading...');
 
 document.addEventListener('DOMContentLoaded', function() {
@@ -118,8 +151,12 @@ document.addEventListener('DOMContentLoaded', function() {
 
           let html = '';
           if (currentTabPosition) {
+            const isYT = currentTabPosition.videoId && !currentTabPosition.scrollY;
+            const displayTitle = isYT
+              ? ('Video: ' + currentTabPosition.videoId)
+              : truncate(tab.title || 'Untitled', 40);
             html = `
-              <p class="title"><strong>${truncate(tab.title || 'Untitled', 40)}</strong></p>
+              <p class="title"><strong>${displayTitle}</strong></p>
               <p class="url">${truncate(currentTabUrl, 45)}</p>
               <div class="details">
                 <span class="time">${formatDate(currentTabPosition.timestamp)}</span>
@@ -215,7 +252,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
     let html = '';
     positions.forEach(([url, position]) => {
-      const title = position.title || 'Untitled';
+      const isYT = position.videoId && !position.scrollY;
+      const title = isYT ? ('Video: ' + position.videoId) : (position.title || 'Untitled');
       html += `
         <div class="position-item" data-url="${url}">
           <div class="title" title="${title}">${truncate(title, 40)}</div>
@@ -375,6 +413,41 @@ document.addEventListener('DOMContentLoaded', function() {
         }
       }
     );
+  }
+
+  // Export log button
+  const exportLogBtn = document.getElementById('export-log');
+  if (exportLogBtn) {
+    exportLogBtn.addEventListener('click', function() {
+      chrome.runtime.sendMessage({ action: 'get_all_logs' }, function(response) {
+        if (chrome.runtime.lastError) {
+          console.error('Popup: Error getting logs:', chrome.runtime.lastError);
+          return;
+        }
+
+        const logs = response.logs || [];
+        if (logs.length === 0) {
+          alert('No logs collected yet.');
+          return;
+        }
+
+        const lines = logs.map(function(entry) {
+          var ts = new Date(entry.timestamp).toISOString();
+          var urlSuffix = entry.url ? ' [' + entry.url + ']' : '';
+          return '[' + ts + '] [' + entry.source + ':' + entry.level + ']' + urlSuffix + ' ' + entry.message;
+        });
+
+        var blob = new Blob([lines.join('\n')], { type: 'text/plain' });
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+        a.download = 'scroll-saver-log-' + new Date().toISOString().replace(/[:.]/g, '-') + '.log';
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      });
+    });
   }
 
   // Initialize

@@ -287,6 +287,17 @@ footer {
   font-weight: 600;
 }
 
+.footer-actions {
+  display: flex;
+  justify-content: center;
+  margin-top: 12px;
+}
+
+#export-log {
+  background-color: #6c757d;
+  color: white;
+}
+
 /* Scrollbar styling */
 ::-webkit-scrollbar {
   width: 6px;

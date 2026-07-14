@@ -1,4 +1,42 @@
 // Scroll Saver - Background Service Worker
+
+// Log buffer for collecting logs from all contexts
+const logBuffer = [];
+const MAX_LOG_ENTRIES = 5000;
+
+const _bgOriginalConsole = {
+  log: console.log.bind(console),
+  error: console.error.bind(console),
+  warn: console.warn.bind(console)
+};
+
+function addLogEntry(level, message, source, url) {
+  const entry = {
+    timestamp: Date.now(),
+    source: source || 'background',
+    level: level,
+    message: typeof message === 'string' ? message : JSON.stringify(message)
+  };
+  if (url) entry.url = url;
+  logBuffer.push(entry);
+  if (logBuffer.length > MAX_LOG_ENTRIES) {
+    logBuffer.shift();
+  }
+}
+
+console.log = function(...args) {
+  _bgOriginalConsole.log(...args);
+  addLogEntry('log', args.join(' '));
+};
+console.error = function(...args) {
+  _bgOriginalConsole.error(...args);
+  addLogEntry('error', args.join(' '));
+};
+console.warn = function(...args) {
+  _bgOriginalConsole.warn(...args);
+  addLogEntry('warn', args.join(' '));
+};
+
 console.log('Background script loading...');
 
 // Normalize URL for storage (remove tracking parameters, etc.)
@@ -54,7 +92,7 @@ function cleanupOldEntries() {
     const toRemove = [];
 
     for (const [key, value] of Object.entries(items)) {
-      if (key.startsWith('reading_position_') || key.startsWith('click_video_')) {
+      if (key.startsWith('reading_position_') || key.startsWith('click_video_') || key.startsWith('yt_position_')) {
         if (value.timestamp && now - value.timestamp > THIRTY_DAYS_MS) {
           toRemove.push(key);
         }
@@ -91,8 +129,11 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       console.log('get_positions: total storage items:', Object.keys(items).length);
       const positions = {};
       for (const [key, value] of Object.entries(items)) {
-        if (key.startsWith('reading_position_')) {
-          positions[key.replace('reading_position_', '')] = value;
+        if (key.startsWith('reading_position_') || key.startsWith('yt_position_')) {
+          const urlKey = key.startsWith('reading_position_')
+            ? key.replace('reading_position_', '')
+            : key.replace('yt_position_', '');
+          positions[urlKey] = value;
         }
       }
       console.log('get_positions: reading positions found:', Object.keys(positions).length);
@@ -111,8 +152,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     const normalizedUrl = normalizeUrl(url);
     const key = `reading_position_${normalizedUrl}`;
     const clickKey = `click_video_${normalizedUrl}`;
+    const ytKey = `yt_position_${normalizedUrl}`;
     console.log('clear_position:', { url, normalizedUrl, key });
-    chrome.storage.local.remove([key, clickKey], () => {
+    chrome.storage.local.remove([key, clickKey, ytKey], () => {
       sendResponse({ success: true });
     });
     return true;
@@ -135,7 +177,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         const toRemove = [];
         for (const key of Object.keys(items)) {
-          if (key.startsWith('reading_position_') || key.startsWith('click_video_')) {
+          if (key.startsWith('reading_position_') || key.startsWith('click_video_') || key.startsWith('yt_position_')) {
             toRemove.push(key);
           }
         }
@@ -176,15 +218,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const url = tabs[0].url;
       const normalizedUrl = normalizeUrl(url);
       const key = `reading_position_${normalizedUrl}`;
+      const ytKey = `yt_position_${normalizedUrl}`;
       console.log('get_current_tab_position:', { url, normalizedUrl, key });
       if (!chrome.storage || !chrome.storage.local) {
         console.error('chrome.storage.local not available');
         sendResponse({ error: 'Storage not available' });
         return;
       }
-      chrome.storage.local.get([key], (result) => {
-        console.log('get_current_tab_position result:', result[key] ? 'FOUND' : 'NOT FOUND');
-        sendResponse({ position: result[key] });
+      chrome.storage.local.get([key, ytKey], (result) => {
+        console.log('get_current_tab_position result:', result[key] ? 'FOUND' : result[ytKey] ? 'FOUND_YT' : 'NOT FOUND');
+        sendResponse({ position: result[ytKey] || result[key] });
       });
     });
     return true;
@@ -239,6 +282,16 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     });
     return true;
   }
+
+  if (request.action === 'store_log') {
+    addLogEntry(request.level, request.message, request.source, request.url);
+    return false;
+  }
+
+  if (request.action === 'get_all_logs') {
+    sendResponse({ logs: logBuffer.slice() });
+    return false;
+  }
 });
 
 // Clean up old entries on install/startup
@@ -259,8 +312,10 @@ function migrateToEnabledSites() {
     let migrated = 0;
 
     for (const key of Object.keys(items)) {
-      if (key.startsWith('reading_position_')) {
-        const normalizedUrl = key.slice('reading_position_'.length);
+      if (key.startsWith('reading_position_') || key.startsWith('yt_position_')) {
+        const normalizedUrl = key.startsWith('reading_position_')
+          ? key.slice('reading_position_'.length)
+          : key.slice('yt_position_'.length);
         if (!enabledSites[normalizedUrl]) {
           enabledSites[normalizedUrl] = true;
           migrated++;

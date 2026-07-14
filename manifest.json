@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Scroll Saver",
-  "version": "1.1.3",
+  "version": "1.1.4",
   "description": "Saves your scroll position on articles & YouTube channels — restores it when you return.",
   "permissions": [
     "storage",

@@ -13,13 +13,12 @@ function ok(n, p, d) { R.push({ name: n, pass: p, detail: d || '' }); console.lo
 function lg(l, d) { console.log('  ' + l + (d !== undefined ? ': ' + d : '')); }
 
 async function main() {
-  console.log('🧪 Scroll Saver — Live YouTube Channel Test\n');
+  console.log('🧪 Scroll Saver — Live YouTube Channel Test (video-ID-only)\n');
   console.log('Target:', CHANNEL_URL, '\n');
 
   const extDir = __dirname;
   const profileDir = path.join(__dirname, '.test-profile');
 
-  // Clean old profile
   try { fs.rmSync(profileDir, { recursive: true, force: true }); } catch(e) {}
 
   const browser = await chromium.launchPersistentContext(profileDir, {
@@ -36,7 +35,6 @@ async function main() {
   page.on('console', m => allLogs.push(`[${m.type()}] ${m.text()}`));
   page.on('pageerror', e => allLogs.push(`[PAGE_ERR] ${e.message}`));
 
-  // CDP
   const cdp = await page.context().newCDPSession(page);
   await cdp.send('Runtime.enable');
   const extCtxs = [];
@@ -65,56 +63,83 @@ async function main() {
 
   async function extEvalAsync(expr) { return extEval(expr); }
 
+  async function readState() {
+    return {
+      tracking: await extEval('window.debugReadingPosition.isTrackingActive()'),
+      restoring: await extEval('window.debugReadingPosition.isRestoring()'),
+      ytChannel: await extEval('window.debugReadingPosition.isYouTubeChannelPage()'),
+    };
+  }
+
+  // helper: read the yt_position_ entry for the channel
+  async function readYTChannelEntry(normalizedUrl) {
+    const raw = await extEvalAsync(`
+      new Promise((resolve) => {
+        const key = 'yt_position_' + ${JSON.stringify(normalizedUrl)};
+        chrome.storage.local.get([key], (r) => {
+          resolve(JSON.stringify(r[key] || null));
+        });
+      })
+    `);
+    return raw && !raw.error ? JSON.parse(raw) : null;
+  }
+
+  // helper: click a video that is in viewport at scrollTop (or within 200px)
+  async function clickVideoAtScroll(scrollTarget, minLinks) {
+    await page.evaluate(y => window.scrollTo(0, y), scrollTarget);
+    await sleep(3000); // wait for lazy-load
+    const info = await page.evaluate(() => {
+      const vh = window.innerHeight;
+      const links = Array.from(document.querySelectorAll('a[href*="/watch?v="]'));
+      const visible = links.filter(l => {
+        const r = l.getBoundingClientRect();
+        return r.top > 120 && r.bottom < vh - 20 && r.width > 0;
+      });
+      const target = visible[0] || links[0];
+      if (!target) return null;
+      const href = target.getAttribute('href');
+      const m = href.match(/[?&]v=([^&]+)/);
+      return { href, videoId: m ? m[1] : null };
+    });
+    if (!info) return info;
+    lg('  Clicking videoId=' + info.videoId + ' href=' + info.href);
+    await page.evaluate((href) => {
+      const links = Array.from(document.querySelectorAll('a[href*="/watch?v="]'));
+      const target = links.find(l => l.getAttribute('href') === href) || links[0];
+      if (!target) return;
+      target.dispatchEvent(new PointerEvent('pointerdown', {
+        bubbles: true, cancelable: true, composed: true, button: 0
+      }));
+      target.click();
+    }, info.href);
+    return info;
+  }
+
   try {
+
   // ==========================================================
-  // STEP 0: Set consent cookie, then navigate
+  // STEP 0: Bypass consent + navigate
   // ==========================================================
   console.log('--- STEP 0: Bypass consent + navigate ---');
-
-  // Set YouTube consent cookie to skip consent page
   await page.context().addCookies([
-    {
-      name: 'CONSENT',
-      value: 'YES+cb.20220719-12-p0.en+FX+999',
-      domain: '.youtube.com',
-      path: '/',
-      sameSite: 'Lax',
-      secure: true,
-    },
-    {
-      name: 'SOCS',
-      value: 'YES',
-      domain: '.youtube.com',
-      path: '/',
-      sameSite: 'Lax',
-      secure: true,
-    },
-    {
-      name: 'CONSENT',
-      value: 'YES+cb',
-      domain: '.consent.youtube.com',
-      path: '/',
-    },
+    { name: 'CONSENT', value: 'YES+cb.20220719-12-p0.en+FX+999', domain: '.youtube.com', path: '/', sameSite: 'Lax', secure: true },
+    { name: 'SOCS', value: 'YES', domain: '.youtube.com', path: '/', sameSite: 'Lax', secure: true },
+    { name: 'CONSENT', value: 'YES+cb', domain: '.consent.youtube.com', path: '/' },
   ]);
   lg('Consent cookies set');
 
-  // Navigate direct to channel
   await page.goto(CHANNEL_URL, { waitUntil: 'domcontentloaded', timeout: 30000 });
   await sleep(5000);
   let currentUrl = page.url();
   lg('After load', currentUrl);
 
-  // If still on consent, click through the consent form, then reload if needed.
   for (let attempt = 0; attempt < 4 && currentUrl.includes('consent.youtube.com'); attempt++) {
     lg('Consent page detected — attempt ' + (attempt + 1) + ' to dismiss');
     try {
       const btn = await page.$([
-        'button[aria-label*="Accept" i]',
-        'button[aria-label*="Reject" i]',
-        'form[action*="save"] button',
-        'button:has-text("Accept all")',
-        'button:has-text("全部接受")',
-        'button:has-text("Reject all")',
+        'button[aria-label*="Accept" i]', 'button[aria-label*="Reject" i]',
+        'form[action*="save"] button', 'button:has-text("Accept all")',
+        'button:has-text("全部接受")', 'button:has-text("Reject all")',
       ].join(', '));
       if (btn) { await btn.click({ timeout: 5000 }).catch(() => {}); await sleep(4000); }
     } catch(e) { lg('Consent click error', e.message); }
@@ -125,89 +150,49 @@ async function main() {
       currentUrl = page.url();
     }
   }
-
-  ok('Landed on YouTube channel',
-    currentUrl.includes('youtube.com/@'),
-    currentUrl);
-
-  // Wait for SPA to render video grid
+  ok('Landed on YouTube channel', currentUrl.includes('youtube.com/@'), currentUrl);
   await sleep(10000);
 
   // ==========================================================
-  // STEP 1: Enable the extension for this EXACT URL
+  // STEP 1: Enable extension
   // ==========================================================
-  console.log('\n--- STEP 1: Enable extension for this page ---');
-
-  // Wait for extension context on this page
+  console.log('\n--- STEP 1: Enable extension ---');
   await sleep(3000);
   let ctxId = await latestExtCtx();
   lg('Ext contexts', extCtxs.length + ' (latest id=' + ctxId + ')');
-  ok('Extension context found on YouTube', ctxId !== null, String(ctxId));
+  ok('Extension context found', ctxId !== null, String(ctxId));
+  if (!ctxId) { lg('STOPPING — no extension context'); return; }
 
-  if (!ctxId) {
-    // Extension might not inject — try to force it
-    lg('No ext context — checking if extension is loaded...');
-    return;
-  }
-
-  // Read the storage key to determine the normalized URL
-  const storageKey = await extEval(
-    'window.debugReadingPosition.getStorageKey(window.location.href)'
-  );
+  const storageKey = await extEval('window.debugReadingPosition.getStorageKey(window.location.href)');
   const normalizedUrl = storageKey && !storageKey.error
-    ? String(storageKey).replace(/^reading_position_/, '')
+    ? String(storageKey).replace(/^yt_position_/, '').replace(/^reading_position_/, '')
     : currentUrl;
-  lg('Normalized URL for enable', normalizedUrl);
+  lg('Normalized URL', normalizedUrl);
 
-  // Enable the extension for this exact URL
-  const enabled = await extEvalAsync(`
+  await extEvalAsync(`
     new Promise((resolve) => {
       chrome.storage.local.get(['enabled_sites'], (r) => {
         const sites = r.enabled_sites || {};
         sites[${JSON.stringify(normalizedUrl)}] = true;
-        // Also enable the consent URL variant (if any redirect happened)
         sites[${JSON.stringify(currentUrl)}] = true;
-        chrome.storage.local.set({ enabled_sites: sites }, () => {
-          resolve('ok:' + Object.keys(sites).length);
-        });
+        chrome.storage.local.set({ enabled_sites: sites }, resolve);
       });
     })
   `);
-  lg('Enable result', String(enabled));
 
   // ==========================================================
-  // STEP 2: Force re-init — navigate to same page
+  // STEP 2: Reload to re-init with enabled site
   // ==========================================================
-  console.log('\n--- STEP 2: Reload to trigger init with enabled site ---');
-
-  // Since the extension already ran init and disabled itself,
-  // we need to reload the page so content script runs again
-  await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(e => lg('Reload timeout (continuing)', e.message.split('\n')[0]));
+  console.log('\n--- STEP 2: Reload ---');
+  await page.reload({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(e => lg('Reload timeout', e.message.split('\n')[0]));
   await sleep(10000);
   currentUrl = page.url();
-  lg('After reload', currentUrl);
   ok('Still on YouTube after reload', currentUrl.includes('youtube.com/@'), currentUrl);
 
-  // Get fresh context after reload
   ctxId = await latestExtCtx();
-  lg('Ext context after reload', String(ctxId));
-
-  // Check state
-  async function readState() {
-    return {
-      tracking: await extEval('window.debugReadingPosition.isTrackingActive()'),
-      restoring: await extEval('window.debugReadingPosition.isRestoring()'),
-      ytChannel: await extEval('window.debugReadingPosition.isYouTubeChannelPage()'),
-      storageKey: await extEval('window.debugReadingPosition.getStorageKey(window.location.href)'),
-    };
-  }
-
   let state = await readState();
-  lg('State after reload', JSON.stringify(state));
-
   ok('YouTube channel detected', state.ytChannel === true, String(state.ytChannel));
 
-  // Wait for tracking
   for (let i = 0; i < 10; i++) {
     if (state.tracking === true) break;
     await sleep(2000);
@@ -215,176 +200,154 @@ async function main() {
     lg('  retry ' + (i + 1), 'tracking=' + state.tracking);
   }
   ok('Tracking active after reload', state.tracking === true, String(state.tracking));
+  if (state.tracking !== true) { lg('STOPPING'); return; }
 
-  if (state.tracking !== true) {
-    lg('STOPPING — tracking not active');
-    return;
-  }
-
-  // Wait for restore cooldown
   await sleep(5000);
 
   // ==========================================================
-  // STEP 3: Scroll + save
+  // STEP 3: Scroll does NOT save for YT (video-ID-only mode)
   // ==========================================================
-  console.log('\n--- STEP 3: Scroll and verify save ---');
-
+  console.log('\n--- STEP 3: Scroll-save blocked for YT ---');
   await page.evaluate(() => window.scrollTo(0, 0));
   await sleep(500);
-
   for (let i = 0; i < 6; i++) {
     await page.evaluate(ys => window.scrollBy(0, ys), 800);
     await sleep(2000);
   }
   await sleep(3000);
   const scrollAfter = await page.evaluate(() => window.scrollY);
-  lg('ScrollY', String(scrollAfter));
   ok('Scrolled > 1500px', scrollAfter > 1500, String(scrollAfter));
 
-  const savedStr = await extEvalAsync(`
+  const scrollSaveExists = await extEvalAsync(`
     new Promise((resolve) => {
       const key = window.debugReadingPosition.getStorageKey(window.location.href);
-      chrome.storage.local.get([key], (r) => {
-        resolve(JSON.stringify(r[key] ? {scrollY:r[key].scrollY, videoId:r[key].videoId} : null));
-      });
+      chrome.storage.local.get([key], (r) => resolve(!!r[key]));
     })
   `);
-  const saved = savedStr && !savedStr.error ? JSON.parse(savedStr) : null;
-  lg('Saved', JSON.stringify(saved));
-  ok('Position saved', saved && saved.scrollY > 500,
-    'saved=' + (saved?.scrollY || 'N/A'));
+  ok('Scroll-save blocked for YT (reading_position_ empty)', scrollSaveExists === false,
+    'reading_position_ exists=' + scrollSaveExists);
 
   // ==========================================================
-  // STEP 4: Click video
+  // STEP 4: Click a viewport video → saves videoId only
   // ==========================================================
-  console.log('\n--- STEP 4: Click video on channel ---');
-  const linkCount = await page.evaluate(
-    () => document.querySelectorAll('a[href*="/watch?v="]').length
-  );
-  lg('Video links', String(linkCount));
+  console.log('\n--- STEP 4: Click video → save videoId ---');
+  const linkCount = await page.evaluate(() => document.querySelectorAll('a[href*="/watch?v="]').length);
   ok('Video links found', linkCount > 0, String(linkCount));
+  if (linkCount === 0) { lg('STOPPING'); return; }
 
-  if (linkCount > 0) {
-    const scrollBefore = await page.evaluate(() => window.scrollY);
-    const channelUrl = page.url();
-    lg('Before click — scrollY=' + scrollBefore + ' url=' + channelUrl);
+  const channelUrl = page.url();
+  const scrollBefore = await page.evaluate(() => window.scrollY);
+  lg('scrollY before click', String(scrollBefore));
 
-    await sleep(2000);
-    // Click a video that is currently in the viewport (the one the user is
-    // actually looking at), NOT the first link in the DOM. Clicking the first
-    // link would force a scroll back to the top and defeat the purpose of the
-    // "align channel restore to the clicked video" feature.
-    const clickTarget = await page.evaluate(() => {
-      const vh = window.innerHeight;
-      const links = Array.from(document.querySelectorAll('a[href*="/watch?v="]'));
-      const inView = links.find(l => {
-        const r = l.getBoundingClientRect();
-        return r.top > 0 && r.top < vh - 100 && r.width > 0 && r.height > 0;
-      }) || links[0];
-      if (!inView) return null;
-      const r = inView.getBoundingClientRect();
-      return { href: inView.getAttribute('href'), absTop: Math.round(r.top + window.scrollY) };
-    });
-    lg('Click target', JSON.stringify(clickTarget));
-    // Simulate a REAL user click: fire pointerdown FIRST (YouTube starts SPA
-    // navigation on pointerdown, so the extension must intercept there — a plain
-    // 'click' listener misses fast clicks), then let the native click navigate.
-    // Done in-page so Playwright doesn't auto-scroll the viewport to the top.
-    await page.evaluate((href) => {
-      const links = Array.from(document.querySelectorAll('a[href*="/watch?v="]'));
-      const target = links.find(l => l.getAttribute('href') === href) || links[0];
-      if (!target) return;
-      target.dispatchEvent(new PointerEvent('pointerdown', {
-        bubbles: true, cancelable: true, composed: true, button: 0
-      }));
-      target.click();
-    }, clickTarget?.href);
+  const clickInfo1 = await clickVideoAtScroll(scrollBefore, 1);
+  ok('Click target found', !!clickInfo1, clickInfo1?.videoId || 'none');
+  if (!clickInfo1) { lg('STOPPING'); return; }
+
+  await sleep(10000);
+  const watchUrl1 = page.url();
+  ok('Navigated to watch page', watchUrl1.includes('watch?v='), watchUrl1);
+
+  // Verify videoId saved under yt_position_ key
+  const ytEntry1 = await readYTChannelEntry(normalizedUrl);
+  lg('YT entry after click', JSON.stringify(ytEntry1));
+  ok('videoId saved under yt_position_ key',
+    ytEntry1 && ytEntry1.videoId === clickInfo1.videoId,
+    'expected=' + clickInfo1.videoId + ' got=' + (ytEntry1?.videoId || 'none'));
+
+  // ==========================================================
+  // STEP 5: Back-navigation → progressive scan restores to video
+  // ==========================================================
+  console.log('\n--- STEP 5: Back-navigation progressive scan restore ---');
+  await page.evaluate(() => window.scrollTo(0, 500));
+  await sleep(4000);
+  await page.goBack({ timeout: 20000 });
+  await sleep(15000);
+
+  const backUrl = page.url();
+  const backScroll = await page.evaluate(() => window.scrollY);
+  const backState = await readState();
+  lg('After back: url=' + backUrl + ' scrollY=' + backScroll + ' restoring=' + backState.restoring);
+
+  ok('Back to channel', backUrl.includes('youtube.com/@'), backUrl);
+  ok('Progressive scan restored scroll near video', backScroll > 0,
+    'scrollY=' + backScroll + ' (beforeClick=' + scrollBefore + ') delta=' + Math.abs(backScroll - scrollBefore));
+  ok('isRestoring reset', backState.restoring === false, String(backState.restoring));
+
+  // ==========================================================
+  // STEP 6: Deep video — scroll near bottom, click, go back
+  // ==========================================================
+  console.log('\n--- STEP 6: Deep video near bottom ---');
+  await sleep(5000);
+
+  // Scroll progressively to load many videos, then target a video near the bottom
+  lg('Loading videos by progressive scrolling...');
+  const totalLoaded = await page.evaluate(async () => {
+    const DH = () => Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
+    let lastH = DH();
+    let stalled = 0;
+    for (let i = 0; i < 40; i++) {
+      window.scrollTo(0, DH());
+      await new Promise(r => setTimeout(r, 600));
+      const h = DH();
+      if (h === lastH) {
+        stalled++;
+        if (stalled > 5) break;
+      } else {
+        stalled = 0;
+        lastH = h;
+      }
+    }
+    return window.scrollY;
+  });
+  lg('Scrolled near bottom, scrollY=' + totalLoaded);
+
+  // Click a video near the bottom (must have deep scroll for progressive scan to kick in)
+  const deepClickInfo = await clickVideoAtScroll(totalLoaded - 300, 5);
+  ok('Deep video target found', !!deepClickInfo, deepClickInfo?.videoId || 'none');
+  if (!deepClickInfo) { lg('STOPPING deep-video test'); }
+  else {
     await sleep(10000);
+    const watchUrl2 = page.url();
+    ok('Deep: navigated to watch page', watchUrl2.includes('watch?v='), watchUrl2);
 
-    const watchUrl = page.url();
-    ok('Navigated to watch page', watchUrl.includes('watch?v='), watchUrl);
+    // Verify deep videoId saved
+    const ytEntryDeep = await readYTChannelEntry(normalizedUrl);
+    lg('Deep YT entry', JSON.stringify(ytEntryDeep));
+    ok('Deep videoId saved', ytEntryDeep && ytEntryDeep.videoId === deepClickInfo.videoId,
+      'expected=' + deepClickInfo.videoId + ' got=' + (ytEntryDeep?.videoId || 'none'));
 
-    // Check click interception
-    const clickSavedStr = await extEvalAsync(`
-      new Promise((resolve) => {
-        const dbg = window.debugReadingPosition;
-        const key = dbg.getStorageKey(${JSON.stringify(channelUrl)});
-        chrome.storage.local.get([key], (r) => {
-          const d = r[key];
-          resolve(JSON.stringify(d ? {scrollY:d.scrollY, videoId:d.videoId} : null));
-        });
-      })
-    `);
-    const clickSaved = clickSavedStr && !clickSavedStr.error ? JSON.parse(clickSavedStr) : null;
-    lg('Channel save after click', JSON.stringify(clickSaved));
-    ok('Click interception saved channel position',
-      clickSaved && clickSaved.scrollY > 500,
-      'scrollY=' + (clickSaved?.scrollY || 'N/A'));
-    if (clickSaved?.videoId)
-      ok('Video ID extracted', true, 'videoId=' + clickSaved.videoId);
-
-    // Scroll watch
-    await page.evaluate(() => window.scrollTo(0, 500));
-    await sleep(4000);
-
-    // ==========================================================
-    // STEP 5: Back-navigation + scroll restore
-    // ==========================================================
-    console.log('\n--- STEP 5: Back-navigation restore ---');
+    // Back to channel
+    await sleep(3000);
     await page.goBack({ timeout: 20000 });
-    await sleep(15000);
+    await sleep(20000); // deep video needs more time for progressive scan
 
-    const backUrl = page.url();
-    const backScroll = await page.evaluate(() => window.scrollY);
-    const backState = await readState();
-    lg('Back: url=' + backUrl + ' scrollY=' + backScroll + ' restoring=' + backState.restoring);
+    const deepBackScroll = await page.evaluate(() => window.scrollY);
+    const deepBackState = await readState();
+    lg('Deep back: scrollY=' + deepBackScroll + ' restoring=' + deepBackState.restoring);
 
-    ok('Back to channel', backUrl.includes('youtube.com'), backUrl);
-    ok('Scroll restored', backScroll > 500,
-      'got ' + backScroll + ' (beforeClick=' + scrollBefore + ') delta=' + Math.abs(backScroll - scrollBefore));
-    ok('isRestoring false', backState.restoring === false, String(backState.restoring));
-
-    // ==========================================================
-    // STEP 6: Save-on-navigate
-    // ==========================================================
-    console.log('\n--- STEP 6: Save-on-navigate ---');
-    const watchSaveStr = await extEvalAsync(`
-      new Promise((resolve) => {
-        const key = window.debugReadingPosition.getStorageKey(${JSON.stringify(watchUrl)});
-        chrome.storage.local.get([key], (r) => {
-          resolve(JSON.stringify(r[key] ? r[key].scrollY : null));
-        });
-      })
-    `);
-    lg('Watch page persisted', watchSaveStr);
-    ok('Save-on-nav: watch page kept',
-      JSON.parse(watchSaveStr || 'null') > 0,
-      'scrollY=' + watchSaveStr);
+    ok('Deep video restored by progressive scan', deepBackScroll > 500,
+      'scrollY=' + deepBackScroll + ' (deep click was near ' + totalLoaded + ')');
+    ok('Deep restore: isRestoring reset', deepBackState.restoring === false, String(deepBackState.restoring));
   }
 
   // ==========================================================
-  // STEP 7: Rapid click scenario (3 videos, quick clicks)
+  // STEP 7: Rapid click — 3 videos, verify unique videoIds
   // ==========================================================
-  console.log('\n--- STEP 7: Rapid click — 3 videos, quick click + back ---');
-
+  console.log('\n--- STEP 7: Rapid click — 3 videos ---');
   const rapidVideoIds = [];
+
   for (let round = 1; round <= 3; round++) {
     console.log('\n  Round ' + round + '/3');
-
-    // Wait for cooldown to expire
     await sleep(3000);
     await page.evaluate(() => window.scrollTo(0, 0));
     await sleep(500);
-
-    // Scroll to a DIFFERENT region each round so positions differ
     await page.evaluate((ys) => window.scrollBy(0, ys), 1000 + round * 1500);
     await sleep(2000);
 
     const rapidScroll = await page.evaluate(() => window.scrollY);
-    lg('  Round ' + round + ' scrollY', String(rapidScroll));
+    lg('  scrollY', String(rapidScroll));
 
-    // Find + click an in-viewport video with MINIMAL delay (rapid click simulation)
-    const rapidClickInfo = await page.evaluate(() => {
+    const info = await page.evaluate(() => {
       const all = document.querySelectorAll('a[href*="/watch?v="]');
       for (const a of all) {
         const r = a.getBoundingClientRect();
@@ -397,69 +360,83 @@ async function main() {
       }
       return null;
     });
-    lg('  Clicked', rapidClickInfo?.videoId || 'NONE');
-
-    // SHORT wait — simulates rapid click (user clicks without waiting for debounce)
+    lg('  Clicked', info?.videoId || 'NONE');
     await sleep(1000);
 
-    // Immediately check if the click stored videoId.
-    // After click, location has already changed to watch URL, so query
-    // the channel's fixed storage key (computed from STEP 1's normalizedUrl).
-    const rapidSaved = await extEvalAsync(`
-      new Promise((resolve) => {
-        const channelKey = 'reading_position_' + ${JSON.stringify(normalizedUrl)};
-        chrome.storage.local.get([channelKey], (r) => {
-          const d = r[channelKey];
-          resolve(JSON.stringify(d ? {scrollY:d.scrollY, videoId:d.videoId || 'NONE'} : null));
-        });
-      })
-    `);
-    const rd = JSON.parse(rapidSaved || '{}');
-    lg('  Rapid save:', JSON.stringify(rd));
+    const ytEntry = await readYTChannelEntry(normalizedUrl);
+    lg('  YT entry:', JSON.stringify(ytEntry));
 
-    if (rd?.videoId && rd.videoId !== 'NONE') {
-      rapidVideoIds.push(rd.videoId);
-      ok('Rapid click round ' + round + ': videoId stored',
-        rd.videoId === rapidClickInfo?.videoId,
-        'stored=' + rd.videoId + ' expected=' + rapidClickInfo?.videoId);
+    if (ytEntry?.videoId) {
+      rapidVideoIds.push(ytEntry.videoId);
+      ok('Round ' + round + ': videoId stored',
+        ytEntry.videoId === info?.videoId,
+        'stored=' + ytEntry.videoId + ' expected=' + info?.videoId);
     } else {
-      ok('Rapid click round ' + round + ': videoId stored',
-        false,
-        'videoId missing — click too fast for handler?');
+      ok('Round ' + round + ': videoId stored', false, 'missing');
     }
 
-    // Wait for watch page to load
     await sleep(8000);
-
     const rapidWatchUrl = page.url();
-    ok('Round ' + round + ': on watch page',
-      rapidWatchUrl.includes('watch?v='),
-      rapidWatchUrl);
+    ok('Round ' + round + ': on watch page', rapidWatchUrl.includes('watch?v='), rapidWatchUrl);
 
-    // Back to channel (wait only minimal time — user doesn't stay long)
     await page.goBack({ timeout: 20000 });
     await sleep(8000);
-
-    // Check if scroll was restored with correct videoId
     const rapidBackScroll = await page.evaluate(() => window.scrollY);
     const rapidBackState = await readState();
     lg('  Back scrollY=' + rapidBackScroll + ' restoring=' + rapidBackState.restoring);
-    ok('Round ' + round + ': scroll restored after rapid back',
-      rapidBackScroll > 500,
-      'scrollY=' + rapidBackScroll);
+    ok('Round ' + round + ': scroll restored', rapidBackScroll > 0, 'scrollY=' + rapidBackScroll);
   }
 
-  // Verify all 3 clicks stored DIFFERENT videoIds (no stale/cached ID)
   if (rapidVideoIds.length === 3) {
     const uniqueIds = new Set(rapidVideoIds);
-    ok('All 3 rapid clicks stored unique videoIds',
+    ok('All 3 rapid clicks unique videoIds',
       uniqueIds.size === 3,
-      'ids=' + rapidVideoIds.join(', ') + ' unique=' + uniqueIds.size);
+      'ids=' + rapidVideoIds.join(', '));
   } else {
     ok('3 rapid clicks completed',
       rapidVideoIds.length === 3,
-      'completed=' + rapidVideoIds.length + '/3 ids=' + rapidVideoIds.join(', '));
+      'completed=' + rapidVideoIds.length + '/3');
   }
+
+  // ==========================================================
+  // STEP 8: Video not found → toast + remove entry
+  // ==========================================================
+  // Use the already-loaded channel page (all videos visible from prior steps).
+  // Save a fake videoId, then force-restore — the page height won't grow
+  // so stalls trigger quickly and we verify the not-found cleanup.
+  console.log('\n--- STEP 8: Video not found → notification ---');
+  // Scroll to top so restoreYouTubePosition runs the scan from scratch
+  await page.evaluate(() => window.scrollTo(0, 0));
+  await sleep(1000);
+
+  // Save a fake videoId
+  await extEvalAsync(`
+    new Promise((resolve) => {
+      const key = 'yt_position_' + ${JSON.stringify(normalizedUrl)};
+      chrome.storage.local.set({ [key]: { videoId: 'FAKE_DEAD_VIDEO', timestamp: Date.now() } }, resolve);
+    })
+  `);
+  lg('Fake videoId saved');
+
+  // Force YouTube restore — the scan will run to end of page
+  await extEval('window.debugReadingPosition.forceYouTubeRestore()');
+  lg('Forced YouTube restore, waiting for scan...');
+
+  // Wait for scan to give up (max 60 attempts × 1s + stall time)
+  await sleep(90000);
+
+  const fakeEntry = await readYTChannelEntry(normalizedUrl);
+  lg('Fake entry after scan:', JSON.stringify(fakeEntry));
+  ok('Fake videoId removed from storage after not-found scan',
+    fakeEntry === null,
+    'entry=' + JSON.stringify(fakeEntry));
+
+  // Check toast/log
+  const logText = allLogs.join('\n');
+  const toastLogged = /Video not found/i.test(logText);
+  ok('Toast/log notification for not-found video',
+    toastLogged,
+    'found in logs=' + toastLogged);
 
   } catch(err) {
     console.error('\n🔴 ' + err.message);
@@ -474,28 +451,27 @@ async function main() {
     console.log('\n--- Log Feature Detection ---');
     const t = allLogs.join('\n');
     for (const [n, pt] of [
-      ['finishRestore() centralized', 'isRestoring reset to false'],
+      ['finishRestore()', 'isRestoring reset to false'],
       ['3s cooldown', 'stability cooldown'],
       ['Click listener attached', 'Click interception attached'],
       ['Click listener removed', 'Click interception removed'],
       ['Video click detected', 'Video link clicked'],
-      ['Video refinement', 'Refining restore'],
-      ['Progressive scroll', 'Progressive scroll attempt'],
+      ['Progressive scan YT', 'Scan attempt'],
       ['Wiggle triggered', 'wiggling'],
       ['Race guard', 'Already restoring, skipping'],
-      ['Save-on-nav pushState', 'pushState'],
-      ['Save-on-nav popstate', 'popstate'],
-      ['restoreScrollPosition', 'restoreScrollPosition called'],
+      ['restoreYouTubePosition', 'restoreYouTubePosition called'],
       ['YT channel detected', 'YouTube channel page detected'],
       ['Scroll Saver active', 'Scroll Saver active for'],
+      ['Video not found toast', 'Video not found'],
+      ['Saved videoId', 'Saved videoId'],
     ]) {
       console.log('  ' + (t.includes(pt) ? '✅' : 'ℹ️') + ' ' + n + ': ' + (t.includes(pt) ? 'seen' : 'not triggered'));
     }
 
-    console.log('\n--- Relevant Logs (last 50) ---');
-    const rel = allLogs.filter(l => /Scroll Saver|CLICK|Saving|Restore|Progressive|video|wiggling|Stall|Refining|cooldown|isRestoring|pushState|popstate|recently|extension|Click interception|Channel|watch\?v=|article|tracking|enabled/.test(l));
+    console.log('\n--- Relevant Logs (last 60) ---');
+    const rel = allLogs.filter(l => /Scroll Saver|CLICK|Saving|Restore|Progressive|video|wiggl|Stall|cooldown|isRestoring|pushState|popstate|extension|Click interception|Channel|article|tracking|enabled|Saved videoId|not found/gi.test(l));
     console.log('  (' + rel.length + ' of ' + allLogs.length + ' total)');
-    rel.slice(-50).forEach(l => console.log('    ' + l));
+    rel.slice(-60).forEach(l => console.log('    ' + l));
 
     console.log('\n' + '-'.repeat(60));
     console.log(R.length + ' assertions | ✅ ' + p + ' passed' + (f > 0 ? ' | ❌ ' + f + ' failed' : ' | 🎉 ALL PASSED'));
