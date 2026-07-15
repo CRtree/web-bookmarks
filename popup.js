@@ -44,13 +44,43 @@ document.addEventListener('DOMContentLoaded', function() {
   const positionsListEl = document.getElementById('positions-list');
   const clearAllBtn = document.getElementById('clear-all');
   const statsCountEl = document.getElementById('stats-count');
-  const extensionToggle = document.getElementById('extension-toggle');
-  const toggleText = document.querySelector('.toggle-text');
+  const addPageBtn = document.getElementById('add-page');
 
   // State
   let currentTabUrl = null;
   let currentTabPosition = null;
   let allPositions = {};
+  let isTracking = false;
+
+  // Theme
+  const themeToggleBtn = document.getElementById('theme-toggle');
+  function applyTheme(theme) {
+    if (theme === 'dark') {
+      document.body.classList.add('theme-dark');
+      if (themeToggleBtn) themeToggleBtn.textContent = '\u2600 Light';
+    } else {
+      document.body.classList.remove('theme-dark');
+      if (themeToggleBtn) themeToggleBtn.textContent = '\u263E Dark';
+    }
+  }
+  function loadTheme() {
+    if (!chrome.storage || !chrome.storage.local) {
+      applyTheme('light');
+      return;
+    }
+    chrome.storage.local.get(['theme'], function(result) {
+      applyTheme(result.theme === 'dark' ? 'dark' : 'light');
+    });
+  }
+  function toggleTheme() {
+    const isDark = document.body.classList.contains('theme-dark');
+    const newTheme = isDark ? 'light' : 'dark';
+    applyTheme(newTheme);
+    if (chrome.storage && chrome.storage.local) {
+      chrome.storage.local.set({ theme: newTheme });
+    }
+  }
+  loadTheme();
 
   // Test background script connection
   function testBackgroundConnection() {
@@ -118,7 +148,6 @@ document.addEventListener('DOMContentLoaded', function() {
   // Update current page info
   function updateCurrentPageInfo() {
     console.log('Popup: Updating current page info...');
-    // Get current active tab
     chrome.tabs.query({ active: true, currentWindow: true }, function(tabs) {
       if (!tabs[0]) {
         console.log('Popup: No active tab found');
@@ -131,89 +160,80 @@ document.addEventListener('DOMContentLoaded', function() {
       console.log('Popup: Current tab URL:', currentTabUrl);
       console.log('Popup: Current tab title:', tab.title);
 
-      // Update extension toggle for this URL
-      updateExtensionToggle(tab.url);
-
-      // Get position for current tab
-      console.log('Popup: Sending get_current_tab_position message to background...');
       chrome.runtime.sendMessage(
-        { action: 'get_current_tab_position' },
-        function(response) {
-          console.log('Popup: get_current_tab_position callback fired');
+        { action: 'get_extension_enabled', url: tab.url },
+        function(enabledResponse) {
           if (chrome.runtime.lastError) {
-            console.error('Popup: Error getting current tab position:', chrome.runtime.lastError);
+            console.error('Popup: Error getting extension enabled state:', chrome.runtime.lastError);
             return;
           }
 
-          console.log('Popup: Received current tab position response:', response);
-          currentTabPosition = response.position;
-          console.log('Popup: Current tab position:', currentTabPosition);
+          isTracking = enabledResponse.enabled === true;
+          updateAddButton();
 
-          let html = '';
-          if (currentTabPosition) {
-            const isYT = currentTabPosition.videoId && !currentTabPosition.scrollY;
-            const displayTitle = isYT
-              ? ('Video: ' + currentTabPosition.videoId)
-              : truncate(tab.title || 'Untitled', 40);
-            html = `
-              <p class="title"><strong>${displayTitle}</strong></p>
-              <p class="url">${truncate(currentTabUrl, 45)}</p>
-              <div class="details">
-                <span class="time">${formatDate(currentTabPosition.timestamp)}</span>
-              </div>
-            `;
-            clearCurrentBtn.disabled = false;
-            console.log('Popup: Showing saved position for current tab');
-          } else {
-            html = `
-              <p class="title"><strong>${truncate(tab.title || 'Untitled', 50)}</strong></p>
-              <p class="url">${truncate(currentTabUrl, 60)}</p>
-              <p class="position">No saved position for this page</p>
-              <p class="help-text">Scroll down on a long article to save your position</p>
-            `;
-            clearCurrentBtn.disabled = true;
-            console.log('Popup: No saved position for current tab');
-          }
+          chrome.runtime.sendMessage(
+            { action: 'get_current_tab_position' },
+            function(positionResponse) {
+              console.log('Popup: get_current_tab_position callback fired');
+              if (chrome.runtime.lastError) {
+                console.error('Popup: Error getting current tab position:', chrome.runtime.lastError);
+                return;
+              }
 
-          currentInfoEl.innerHTML = html;
+              console.log('Popup: Received current tab position response:', positionResponse);
+              currentTabPosition = positionResponse.position;
+              console.log('Popup: Current tab position:', currentTabPosition);
+
+              let html = '';
+              if (currentTabPosition) {
+                const isYT = currentTabPosition.videoId && !currentTabPosition.scrollY;
+                const displayTitle = isYT
+                  ? `<a href="https://www.youtube.com/watch?v=${currentTabPosition.videoId}" target="_blank" class="entry-link">&#9654; ${currentTabPosition.videoId}</a>`
+                  : truncate(tab.title || 'Untitled', 40);
+                html = `
+                  <div class="entry">
+                    <div class="entry-title">${displayTitle}</div>
+                    <div class="entry-url">${truncate(currentTabUrl, 45)}</div>
+                    <div class="entry-meta">${formatDate(currentTabPosition.timestamp)}</div>
+                  </div>
+                `;
+                clearCurrentBtn.disabled = false;
+                console.log('Popup: Showing saved position for current tab');
+              } else {
+                html = `
+                  <div class="entry">
+                    <div class="entry-title">${truncate(tab.title || 'Untitled', 50)}</div>
+                    <div class="entry-url">${truncate(currentTabUrl, 60)}</div>
+                    ${isTracking
+                      ? '<p class="entry-status">Tracking &mdash; start scrolling to save a position</p>'
+                      : '<p class="entry-note">No saved position for this page</p>'
+                    }
+                  </div>
+                `;
+                clearCurrentBtn.disabled = true;
+                console.log('Popup: No saved position for current tab');
+              }
+
+              currentInfoEl.innerHTML = html;
+            }
+          );
         }
       );
     });
   }
 
-  // Update extension toggle state for current URL
-  function updateExtensionToggle(url) {
-    if (!url) {
-      console.log('Popup: No URL provided for toggle update');
-      return;
+  // Update add button state for current URL
+  function updateAddButton() {
+    const addBtn = document.getElementById('add-page');
+    if (!addBtn) return;
+
+    if (isTracking) {
+      addBtn.textContent = 'Stop';
+      addBtn.classList.add('btn-added');
+    } else {
+      addBtn.textContent = 'Add';
+      addBtn.classList.remove('btn-added');
     }
-
-    console.log('Popup: Updating extension toggle for URL:', url);
-    chrome.runtime.sendMessage(
-      { action: 'get_extension_enabled', url },
-      function(response) {
-        console.log('Popup: get_extension_enabled callback fired');
-        if (chrome.runtime.lastError) {
-          console.error('Popup: Error getting extension enabled state:', chrome.runtime.lastError);
-          return;
-        }
-
-        console.log('Popup: Extension enabled state:', response.enabled);
-        const isEnabled = response.enabled === true; // default to disabled if undefined
-
-        // Update toggle checkbox
-        if (extensionToggle) {
-          extensionToggle.checked = isEnabled;
-          console.log('Popup: Toggle checkbox set to:', isEnabled);
-        }
-
-        // Update toggle text
-        if (toggleText) {
-          toggleText.textContent = isEnabled ? 'Enabled' : 'Disabled';
-          console.log('Popup: Toggle text set to:', toggleText.textContent);
-        }
-      }
-    );
   }
 
   // Load all positions
@@ -242,7 +262,7 @@ document.addEventListener('DOMContentLoaded', function() {
 
     if (positions.length === 0) {
       console.log('Popup: No positions to display');
-      positionsListEl.innerHTML = '<p class="empty">No saved positions yet</p>';
+      positionsListEl.innerHTML = '<p class="empty-state">No saved positions yet</p>';
       return;
     }
 
@@ -253,17 +273,18 @@ document.addEventListener('DOMContentLoaded', function() {
     let html = '';
     positions.forEach(([url, position]) => {
       const isYT = position.videoId && !position.scrollY;
-      const title = isYT ? ('Video: ' + position.videoId) : (position.title || 'Untitled');
+      const titleText = isYT ? position.videoId : (position.title || 'Untitled');
+      const title = isYT
+        ? `<a href="https://www.youtube.com/watch?v=${position.videoId}" target="_blank" class="entry-link">&#9654; ${position.videoId}</a>`
+        : truncate(position.title || 'Untitled', 40);
       html += `
-        <div class="position-item" data-url="${url}">
-          <div class="title" title="${title}">${truncate(title, 40)}</div>
-          <div class="url" title="${url}">${truncate(url, 45)}</div>
-          <div class="details">
-            <span class="time">${formatDate(position.timestamp)}</span>
-          </div>
-          <div class="actions">
-            <button class="btn btn-secondary btn-small goto" data-url="${url}">Go to Page</button>
-            <button class="btn btn-danger btn-small clear-one" data-url="${url}">Delete</button>
+        <div class="entry" data-url="${url}">
+          <div class="entry-title" title="${titleText}">${title}</div>
+          <div class="entry-url" title="${url}">${truncate(url, 45)}</div>
+          <div class="entry-meta">${formatDate(position.timestamp)}</div>
+          <div class="entry-actions">
+            <button class="btn goto" data-url="${url}">Go to Page</button>
+            <button class="btn btn-danger clear-one" data-url="${url}">Delete</button>
           </div>
         </div>
       `;
@@ -353,37 +374,29 @@ document.addEventListener('DOMContentLoaded', function() {
     loadAllPositions();
   });
 
-  // Extension toggle
-  if (extensionToggle) {
-    extensionToggle.addEventListener('change', function() {
+  // Add/Stop button
+  if (addPageBtn) {
+    addPageBtn.addEventListener('click', function() {
       if (!currentTabUrl) {
-        console.log('Popup: No current tab URL, cannot update extension state');
+        console.log('Popup: No current tab URL, cannot update tracking state');
         return;
       }
 
-      const isEnabled = this.checked;
-      console.log('Popup: Extension toggle changed to:', isEnabled, 'for URL:', currentTabUrl);
+      const newState = !isTracking;
+      console.log('Popup: Add button clicked, setting tracking to:', newState, 'for URL:', currentTabUrl);
 
-      // Update toggle text immediately for responsive UI
-      if (toggleText) {
-        toggleText.textContent = isEnabled ? 'Enabled' : 'Disabled';
-      }
-
-      // Send message to background to update state
       chrome.runtime.sendMessage(
-        { action: 'set_extension_enabled', url: currentTabUrl, enabled: isEnabled },
+        { action: 'set_extension_enabled', url: currentTabUrl, enabled: newState },
         function(response) {
           if (chrome.runtime.lastError) {
-            console.error('Popup: Error setting extension enabled state:', chrome.runtime.lastError);
-            // Revert toggle on error
-            extensionToggle.checked = !isEnabled;
-            if (toggleText) {
-              toggleText.textContent = !isEnabled ? 'Enabled' : 'Disabled';
-            }
+            console.error('Popup: Error setting tracking state:', chrome.runtime.lastError);
             return;
           }
 
-          console.log('Popup: Extension state updated successfully:', response);
+          console.log('Popup: Tracking state updated successfully:', response);
+          isTracking = newState;
+          updateAddButton();
+          updateCurrentPageInfo();
         }
       );
     });
@@ -448,6 +461,11 @@ document.addEventListener('DOMContentLoaded', function() {
         URL.revokeObjectURL(url);
       });
     });
+  }
+
+  // Theme toggle button
+  if (themeToggleBtn) {
+    themeToggleBtn.addEventListener('click', toggleTheme);
   }
 
   // Initialize
