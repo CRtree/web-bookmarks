@@ -46,6 +46,9 @@ document.addEventListener('DOMContentLoaded', function() {
   const statsCountEl = document.getElementById('stats-count');
   const addPageBtn = document.getElementById('add-page');
 
+  // YouTube play icon (inline SVG)
+  const PLAY_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:3px;" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
+
   // State
   let currentTabUrl = null;
   let currentTabPosition = null;
@@ -188,7 +191,7 @@ document.addEventListener('DOMContentLoaded', function() {
               if (currentTabPosition) {
                 const isYT = currentTabPosition.videoId && !currentTabPosition.scrollY;
                 const displayTitle = isYT
-                  ? `<a href="https://www.youtube.com/watch?v=${currentTabPosition.videoId}" target="_blank" class="entry-link">&#9654; ${currentTabPosition.videoId}</a>`
+                  ? `<a href="https://www.youtube.com/watch?v=${currentTabPosition.videoId}" target="_blank" class="entry-link">${PLAY_ICON}${currentTabPosition.videoId}</a>`
                   : truncate(tab.title || 'Untitled', 40);
                 html = `
                   <div class="entry">
@@ -275,7 +278,7 @@ document.addEventListener('DOMContentLoaded', function() {
       const isYT = position.videoId && !position.scrollY;
       const titleText = isYT ? position.videoId : (position.title || 'Untitled');
       const title = isYT
-        ? `<a href="https://www.youtube.com/watch?v=${position.videoId}" target="_blank" class="entry-link">&#9654; ${position.videoId}</a>`
+        ? `<a href="https://www.youtube.com/watch?v=${position.videoId}" target="_blank" class="entry-link">${PLAY_ICON}${position.videoId}</a>`
         : truncate(position.title || 'Untitled', 40);
       html += `
         <div class="entry" data-url="${url}">

@@ -1,17 +1,17 @@
 /* ================================================================
-   Scroll Saver — Editorial Typesetting Theme
+   Youtube Scroll Saver — Editorial Typesetting Theme
    ================================================================ */
 
 :root {
   --color-bg: #f5f1ea;
   --color-surface: #fdfbf7;
   --color-text: #2d2416;
-  --color-text-secondary: #8c7860;
-  --color-text-tertiary: #b8a590;
+  --color-text-secondary: #695437;
+  --color-text-tertiary: #847258;
   --color-border: #e6ddd0;
   --color-border-light: #efe8dd;
-  --color-accent: #6b3e2e;
-  --color-accent-hover: #865040;
+  --color-accent: #d42020;
+  --color-accent-hover: #b01818;
   --color-danger: #9b3a3a;
   --color-danger-hover: #b54c4c;
   --color-success: #4a6741;
@@ -29,7 +29,7 @@
 
 body {
   font-family: var(--font-body);
-  font-size: 13px;
+  font-size: 15px;
   line-height: 1.55;
   color: var(--color-text);
   background: var(--color-bg);
@@ -44,14 +44,14 @@ body {
 
 body.theme-dark {
   --color-bg: #1a1713;
-  --color-surface: #24211c;
+  --color-surface: #282420;
   --color-text: #e4dccf;
-  --color-text-secondary: #a09885;
-  --color-text-tertiary: #6b6456;
-  --color-border: #3a352c;
-  --color-border-light: #2f2b24;
-  --color-accent: #c48260;
-  --color-accent-hover: #d49a7c;
+  --color-text-secondary: #bdb5a5;
+  --color-text-tertiary: #908878;
+  --color-border: #3d3730;
+  --color-border-light: #322d26;
+  --color-accent: #ff5555;
+  --color-accent-hover: #ff7878;
   --color-danger: #c45a5a;
   --color-danger-hover: #d87272;
   --color-success: #7a9c6b;
@@ -72,7 +72,7 @@ body.theme-dark {
 
 .masthead-title {
   font-family: var(--font-display);
-  font-size: 24px;
+  font-size: 25px;
   font-weight: 700;
   color: var(--color-text);
   letter-spacing: 0.03em;
@@ -91,7 +91,7 @@ body.theme-dark {
 
 .masthead-tagline {
   font-family: var(--font-body);
-  font-size: 11px;
+  font-size: 13px;
   font-style: italic;
   color: var(--color-text-secondary);
   letter-spacing: 0.04em;
@@ -126,7 +126,7 @@ body.theme-dark {
 
 .card-label {
   font-family: var(--font-body);
-  font-size: 10px;
+  font-size: 13px;
   font-weight: 600;
   letter-spacing: 0.13em;
   text-transform: uppercase;
@@ -135,7 +135,7 @@ body.theme-dark {
 
 .card-count {
   font-family: var(--font-body);
-  font-size: 11px;
+  font-size: 13px;
   font-style: italic;
   color: var(--color-text-secondary);
 }
@@ -154,7 +154,7 @@ body.theme-dark {
 
 .btn-text {
   font-family: var(--font-body);
-  font-size: 10px;
+  font-size: 12px;
   background: none;
   border: none;
   color: var(--color-text-tertiary);
@@ -185,7 +185,7 @@ body.theme-dark {
 
 .entry-title {
   font-family: var(--font-body);
-  font-size: 14px;
+  font-size: 15px;
   font-weight: 600;
   color: var(--color-text);
   margin-bottom: 2px;
@@ -197,7 +197,7 @@ body.theme-dark {
 
 .entry-url {
   font-family: var(--font-body);
-  font-size: 11px;
+  font-size: 12px;
   font-style: italic;
   color: var(--color-text-secondary);
   overflow: hidden;
@@ -208,14 +208,14 @@ body.theme-dark {
 
 .entry-meta {
   font-family: var(--font-body);
-  font-size: 10px;
+  font-size: 13px;
   font-style: italic;
   color: var(--color-text-tertiary);
 }
 
 .entry-note {
   font-family: var(--font-body);
-  font-size: 12px;
+  font-size: 14px;
   font-style: italic;
   color: var(--color-text-tertiary);
   margin-top: 4px;
@@ -223,7 +223,7 @@ body.theme-dark {
 
 .entry-status {
   font-family: var(--font-body);
-  font-size: 10px;
+  font-size: 13px;
   font-style: italic;
   color: var(--color-success);
   margin-top: 4px;
@@ -234,7 +234,7 @@ body.theme-dark {
   font-style: italic;
   color: var(--color-text-tertiary);
   padding: 8px 0;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 /* YouTube video link */
@@ -261,7 +261,7 @@ body.theme-dark {
 
 .btn {
   font-family: var(--font-body);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 500;
   padding: 5px 11px;
   border: 1px solid var(--color-border);
@@ -298,7 +298,7 @@ body.theme-dark {
 }
 
 .btn-utility {
-  font-size: 10px;
+  font-size: 12px;
   padding: 5px 10px;
   background: transparent;
   border: 1px solid var(--color-border-light);
@@ -311,11 +311,28 @@ body.theme-dark {
   color: var(--color-text-secondary);
 }
 
+.btn-icon {
+  font-size: 15px;
+  line-height: 1;
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid var(--color-border-light);
+  border-radius: 5px;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-icon:hover {
+  border-color: var(--color-text-secondary);
+  color: var(--color-text-secondary);
+}
+
 /* ---- Add Button ---- */
 
 .btn-add {
   font-family: var(--font-body);
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 600;
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -357,7 +374,7 @@ body.theme-dark {
   font-family: var(--font-body);
   font-style: italic;
   color: var(--color-text-tertiary);
-  font-size: 13px;
+  font-size: 15px;
 }
 
 /* ---- Footer ---- */
@@ -370,7 +387,7 @@ body.theme-dark {
 
 .footer-help {
   font-family: var(--font-body);
-  font-size: 10px;
+  font-size: 12px;
   font-style: italic;
   line-height: 1.65;
   color: var(--color-text-tertiary);
@@ -385,7 +402,7 @@ body.theme-dark {
 }
 
 #theme-toggle {
-  font-size: 10px;
+  font-size: 12px;
 }
 
 /* ---- Scrollbar ---- */
