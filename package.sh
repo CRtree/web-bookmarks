@@ -26,6 +26,9 @@ cp LICENSE "${TARGET_DIR}/"
 # Copy icons directory
 cp -r icons "${TARGET_DIR}/"
 
+# Copy i18n locale files
+cp -r _locales "${TARGET_DIR}/"
+
 # Create ZIP (excluding hidden files and macOS metadata)
 cd "${TEMP_DIR}"
 zip -r "${ZIP_FILE}" "${EXTENSION_NAME}" -x ".*" -x "__MACOSX" -x "*/.DS_Store"
