@@ -49,6 +49,17 @@ document.addEventListener('DOMContentLoaded', function() {
   // YouTube play icon (inline SVG)
   const PLAY_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:3px;" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
 
+  // Build the correct YouTube link for a saved content entry. Shorts live under
+  // /shorts/<id> while regular videos use /watch?v=<id>. Entries saved before the
+  // type field existed default to 'video'.
+  function getYouTubeContentLink(position) {
+    const isShorts = position && position.type === 'shorts';
+    const base = isShorts
+      ? 'https://www.youtube.com/shorts/'
+      : 'https://www.youtube.com/watch?v=';
+    return base + (position ? position.videoId : '');
+  }
+
   // State
   let currentTabUrl = null;
   let currentTabPosition = null;
@@ -60,10 +71,16 @@ document.addEventListener('DOMContentLoaded', function() {
   function applyTheme(theme) {
     if (theme === 'dark') {
       document.body.classList.add('theme-dark');
-      if (themeToggleBtn) themeToggleBtn.textContent = '\u2600 Light';
+      if (themeToggleBtn) {
+        themeToggleBtn.textContent = '\u2600';
+        themeToggleBtn.title = 'Switch to light';
+      }
     } else {
       document.body.classList.remove('theme-dark');
-      if (themeToggleBtn) themeToggleBtn.textContent = '\u263E Dark';
+      if (themeToggleBtn) {
+        themeToggleBtn.textContent = '\u263E';
+        themeToggleBtn.title = 'Switch to dark';
+      }
     }
   }
   function loadTheme() {
@@ -114,13 +131,13 @@ document.addEventListener('DOMContentLoaded', function() {
         console.error('Popup: Storage access error:', chrome.runtime.lastError);
       } else {
         console.log('Popup: Storage access successful, total items:', Object.keys(items).length);
-        const readingPositions = {};
+        const ytPositions = {};
         for (const [key, value] of Object.entries(items)) {
-          if (key.startsWith('reading_position_')) {
-            readingPositions[key] = value;
+          if (key.startsWith('yt_position_')) {
+            ytPositions[key] = value;
           }
         }
-        console.log('Popup: Reading positions in storage:', Object.keys(readingPositions).length);
+        console.log('Popup: YouTube positions in storage:', Object.keys(ytPositions).length);
       }
     });
   }
@@ -142,10 +159,17 @@ document.addEventListener('DOMContentLoaded', function() {
     return date.toLocaleDateString();
   }
 
-  // Truncate text
+  // Truncate text (keeps the beginning)
   function truncate(text, maxLength) {
     if (text.length <= maxLength) return text;
     return text.substring(0, maxLength - 3) + '...';
+  }
+
+  // Truncate from the START, keeping the trailing identity. Used for URLs where
+  // the path suffix is what identifies the saved page (e.g. /@channel, /shorts/<id>).
+  function truncatePrefix(text, maxLength) {
+    if (!text || text.length <= maxLength) return text;
+    return '...' + text.substring(Math.max(0, text.length - (maxLength - 3)));
   }
 
   // Update current page info
@@ -191,12 +215,12 @@ document.addEventListener('DOMContentLoaded', function() {
               if (currentTabPosition) {
                 const isYT = currentTabPosition.videoId && !currentTabPosition.scrollY;
                 const displayTitle = isYT
-                  ? `<a href="https://www.youtube.com/watch?v=${currentTabPosition.videoId}" target="_blank" class="entry-link">${PLAY_ICON}${currentTabPosition.videoId}</a>`
+                  ? `<a href="${getYouTubeContentLink(currentTabPosition)}" target="_blank" class="entry-link">${PLAY_ICON}${currentTabPosition.videoId}</a>`
                   : truncate(tab.title || 'Untitled', 40);
                 html = `
                   <div class="entry">
                     <div class="entry-title">${displayTitle}</div>
-                    <div class="entry-url">${truncate(currentTabUrl, 45)}</div>
+                    <div class="entry-url">${truncatePrefix(currentTabUrl, 30)}</div>
                     <div class="entry-meta">${formatDate(currentTabPosition.timestamp)}</div>
                   </div>
                 `;
@@ -206,7 +230,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 html = `
                   <div class="entry">
                     <div class="entry-title">${truncate(tab.title || 'Untitled', 50)}</div>
-                    <div class="entry-url">${truncate(currentTabUrl, 60)}</div>
+                    <div class="entry-url">${truncatePrefix(currentTabUrl, 30)}</div>
                     ${isTracking
                       ? '<p class="entry-status">Tracking &mdash; start scrolling to save a position</p>'
                       : '<p class="entry-note">No saved position for this page</p>'
@@ -278,16 +302,18 @@ document.addEventListener('DOMContentLoaded', function() {
       const isYT = position.videoId && !position.scrollY;
       const titleText = isYT ? position.videoId : (position.title || 'Untitled');
       const title = isYT
-        ? `<a href="https://www.youtube.com/watch?v=${position.videoId}" target="_blank" class="entry-link">${PLAY_ICON}${position.videoId}</a>`
+        ? `<a href="${getYouTubeContentLink(position)}" target="_blank" class="entry-link">${PLAY_ICON}${position.videoId}</a>`
         : truncate(position.title || 'Untitled', 40);
       html += `
         <div class="entry" data-url="${url}">
-          <div class="entry-title" title="${titleText}">${title}</div>
-          <div class="entry-url" title="${url}">${truncate(url, 45)}</div>
-          <div class="entry-meta">${formatDate(position.timestamp)}</div>
+          <div class="entry-main">
+            <div class="entry-title" title="${titleText}">${title}</div>
+            <div class="entry-url" title="${url}">${truncatePrefix(url, 48)}</div>
+            <div class="entry-meta">${formatDate(position.timestamp)}</div>
+          </div>
           <div class="entry-actions">
-            <button class="btn goto" data-url="${url}">Go to Page</button>
-            <button class="btn btn-danger clear-one" data-url="${url}">Delete</button>
+            <button class="icon-btn goto" data-url="${url}" title="Go to page">\u2197</button>
+            <button class="icon-btn danger clear-one" data-url="${url}" title="Delete">\u2715</button>
           </div>
         </div>
       `;
@@ -331,6 +357,8 @@ document.addEventListener('DOMContentLoaded', function() {
   // Clear position for current tab
   clearCurrentBtn.addEventListener('click', function() {
     if (!currentTabUrl || !currentTabPosition) return;
+
+    if (!confirm(`Delete the saved position for this page?\n\n${truncatePrefix(currentTabUrl, 50)}`)) return;
 
     chrome.runtime.sendMessage(
       { action: 'clear_position', url: currentTabUrl },
@@ -407,6 +435,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // Clear a specific position
   function clearPosition(url) {
+    if (!confirm(`Delete this saved position?\n\n${truncatePrefix(url, 50)}`)) return;
+
     chrome.runtime.sendMessage(
       { action: 'clear_position', url: url },
       function(response) {

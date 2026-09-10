@@ -3,6 +3,8 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 EXTENSION_NAME="scroll-saver"
 VERSION=$(grep '"version"' manifest.json | cut -d'"' -f4)
 ZIP_FILE="${EXTENSION_NAME}-v${VERSION}.zip"
@@ -42,4 +44,17 @@ rm -rf "${TEMP_DIR}"
 
 echo "✅ Package created: ${ZIP_FILE}"
 echo "📦 Files included:"
-unzip -l "${ZIP_FILE}" | tail -n +4 | head -n -2
+unzip -l "${ZIP_FILE}" | awk 'NR>3 && NF>0 && !/files,.*bytes/'
+
+# ============================================================
+# Regenerate Chrome Web Store marketing assets each release.
+# These go to store-assets/ (outside the extension zip).
+# Fails gracefully — packaging still succeeds without them.
+# ============================================================
+echo
+echo "📸 Regenerating Chrome Web Store assets..."
+if "${SCRIPT_DIR}/tools/marketing/build.sh"; then
+  echo "✅ Store assets ready in ${SCRIPT_DIR}/store-assets/"
+else
+  echo "⚠️  Store asset generation skipped (install playwright: npm install, and ensure it's macOS with sips)"
+fi 

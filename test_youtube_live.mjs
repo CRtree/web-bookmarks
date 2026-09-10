@@ -167,12 +167,16 @@ async function main() {
   const normalizedUrl = storageKey && !storageKey.error
     ? String(storageKey).replace(/^yt_position_/, '').replace(/^reading_position_/, '')
     : currentUrl;
+  // Enablement is keyed at the channel root, so enabling the root covers all tabs.
+  const channelRoot = (currentUrl.match(/^((?:https?:\/\/)(?:www\.)?(?:youtube\.com|youtu\.be)\/@[^/]+)/) || [])[1] || currentUrl;
   lg('Normalized URL', normalizedUrl);
+  lg('Channel root', channelRoot);
 
   await extEvalAsync(`
     new Promise((resolve) => {
       chrome.storage.local.get(['enabled_sites'], (r) => {
         const sites = r.enabled_sites || {};
+        sites[${JSON.stringify(channelRoot)}] = true;
         sites[${JSON.stringify(normalizedUrl)}] = true;
         sites[${JSON.stringify(currentUrl)}] = true;
         chrome.storage.local.set({ enabled_sites: sites }, resolve);

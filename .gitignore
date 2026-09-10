@@ -1,3 +1,4 @@
 .playwright-mcp/*
 scroll-saver-*.zip
 node_modules/*
+store-assets/*

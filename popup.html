@@ -5,54 +5,56 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Youtube Scroll Saver</title>
-  <link href="https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,600;0,700;1,600&family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,500;0,8..60,600;1,8..60,400;1,8..60,500&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="popup.css">
 </head>
 
 <body>
-  <div class="container">
+  <div class="app">
 
-    <header class="masthead">
-      <h1 class="masthead-title">Youtube Scroll Saver</h1>
-      <div class="masthead-rule"></div>
-      <p class="masthead-tagline">ADD the channel you want to remember.</p>
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-dot"></span>
+        <div class="brand-text">
+          <span class="brand-name">Scroll Saver</span>
+          <span class="tagline">ADD the YouTube channel you want to remember.</span>
+        </div>
+      </div>
+      <div class="topbar-actions">
+        <button id="export-log" class="icon-btn" title="Export logs">⤓</button>
+        <button id="theme-toggle" class="icon-btn" title="Toggle theme">☾</button>
+      </div>
     </header>
 
-    <section class="card">
-      <div class="card-header">
-        <h2 class="card-label">Current Page</h2>
-        <button id="add-page" class="btn btn-add">Add</button>
-      </div>
-      <div class="card-body">
-        <div id="current-info">
+    <main class="columns">
+
+      <section class="panel current">
+        <div class="panel-head">
+          <span class="panel-label">Current</span>
+          <button id="add-page" class="btn-add">Add</button>
+        </div>
+        <div id="current-info" class="current-info">
           <p class="entry-loading">Loading&hellip;</p>
         </div>
-        <div class="entry-actions">
-          <button id="refresh" class="btn">Refresh</button>
+        <div class="current-actions">
+          <button id="refresh" class="btn">↻ Refresh</button>
           <button id="clear-current" class="btn btn-danger" disabled>Delete</button>
         </div>
-      </div>
-    </section>
+      </section>
 
-    <section class="card">
-      <div class="card-header">
-        <h2 class="card-label">Stored</h2>
-        <div class="card-header-right">
-          <span class="card-count"><span id="stats-count">0</span> positions</span>
-          <button id="clear-all" class="btn-text">Delete all</button>
+      <section class="panel stored">
+        <div class="panel-head">
+          <span class="panel-label">Stored</span>
+          <div class="panel-head-right">
+            <span class="card-count"><span id="stats-count">0</span> saved</span>
+            <button id="clear-all" class="link">Delete all</button>
+          </div>
         </div>
-      </div>
-      <div id="positions-list">
-        <p class="empty-state">No saved positions yet</p>
-      </div>
-    </section>
+        <div id="positions-list" class="stored-list">
+          <p class="empty-state">No saved positions yet</p>
+        </div>
+      </section>
 
-    <footer class="footer">
-      <div class="footer-actions">
-        <button id="export-log" class="btn btn-utility">Export Log</button>
-        <button id="theme-toggle" class="btn btn-utility">Dark</button>
-      </div>
-    </footer>
+    </main>
 
   </div>
 

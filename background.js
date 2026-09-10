@@ -44,21 +44,8 @@ function normalizeUrl(url) {
   try {
     const urlObj = new URL(url);
 
-    // Twitter/X normalization
-    if (urlObj.hostname.includes('x.com') || urlObj.hostname.includes('twitter.com')) {
-      // Remove common tracking parameters
-      const paramsToRemove = ['s', 't', 'utm_source', 'utm_medium', 'utm_campaign', 'ref_src', 'ref_url'];
-      paramsToRemove.forEach(param => urlObj.searchParams.delete(param));
-
-      // Keep only the path for tweet pages (remove fragments)
-      if (urlObj.pathname.includes('/status/')) {
-        urlObj.hash = '';
-      }
-    }
-
-    // YouTube normalization
+    // YouTube normalization: for channel pages, strip query params to normalize
     if (urlObj.hostname.includes('youtube.com') || urlObj.hostname.includes('youtu.be')) {
-      // For channel pages, strip query params to normalize
       if (urlObj.pathname.startsWith('/@')) {
         urlObj.search = '';
         urlObj.hash = '';
@@ -70,6 +57,29 @@ function normalizeUrl(url) {
     console.warn('URL normalization failed, using original:', url, e);
     return url;
   }
+}
+
+// Extract the channel root URL for any YouTube channel page (e.g. /@handle,
+// /@handle/videos, /@handle/shorts). Returns null for non-channel URLs.
+// This lets a channel be enabled once and apply to every tab under it.
+function getChannelRootUrl(url) {
+  try {
+    const urlObj = new URL(url);
+    if (urlObj.hostname.includes('youtube.com') || urlObj.hostname.includes('youtu.be')) {
+      const match = urlObj.pathname.match(/^(\/@[^/]+)/);
+      if (match) {
+        return urlObj.origin + match[1];
+      }
+    }
+  } catch (e) {}
+  return null;
+}
+
+// The storage key used for enablement. Channel pages are enabled at their
+// channel root so a single add covers /videos, /shorts, and all other tabs.
+function getEnabledUrl(url) {
+  const root = getChannelRootUrl(url);
+  return root || normalizeUrl(url);
 }
 
 // Clean up old entries (older than 30 days)
@@ -92,7 +102,7 @@ function cleanupOldEntries() {
     const toRemove = [];
 
     for (const [key, value] of Object.entries(items)) {
-      if (key.startsWith('reading_position_') || key.startsWith('click_video_') || key.startsWith('yt_position_')) {
+      if (key.startsWith('yt_position_')) {
         if (value.timestamp && now - value.timestamp > THIRTY_DAYS_MS) {
           toRemove.push(key);
         }
@@ -129,10 +139,8 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       console.log('get_positions: total storage items:', Object.keys(items).length);
       const positions = {};
       for (const [key, value] of Object.entries(items)) {
-        if (key.startsWith('reading_position_') || key.startsWith('yt_position_')) {
-          const urlKey = key.startsWith('reading_position_')
-            ? key.replace('reading_position_', '')
-            : key.replace('yt_position_', '');
+        if (key.startsWith('yt_position_')) {
+          const urlKey = key.replace('yt_position_', '');
           positions[urlKey] = value;
         }
       }
@@ -150,11 +158,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     }
     const { url } = request;
     const normalizedUrl = normalizeUrl(url);
-    const key = `reading_position_${normalizedUrl}`;
-    const clickKey = `click_video_${normalizedUrl}`;
     const ytKey = `yt_position_${normalizedUrl}`;
-    console.log('clear_position:', { url, normalizedUrl, key });
-    chrome.storage.local.remove([key, clickKey, ytKey], () => {
+    console.log('clear_position:', { url, normalizedUrl, ytKey });
+    chrome.storage.local.remove([ytKey], () => {
       sendResponse({ success: true });
     });
     return true;
@@ -177,7 +183,7 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
         const toRemove = [];
         for (const key of Object.keys(items)) {
-          if (key.startsWith('reading_position_') || key.startsWith('click_video_') || key.startsWith('yt_position_')) {
+          if (key.startsWith('yt_position_')) {
             toRemove.push(key);
           }
         }
@@ -217,27 +223,27 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       }
       const url = tabs[0].url;
       const normalizedUrl = normalizeUrl(url);
-      const key = `reading_position_${normalizedUrl}`;
       const ytKey = `yt_position_${normalizedUrl}`;
-      console.log('get_current_tab_position:', { url, normalizedUrl, key });
+      console.log('get_current_tab_position:', { url, normalizedUrl, ytKey });
       if (!chrome.storage || !chrome.storage.local) {
         console.error('chrome.storage.local not available');
         sendResponse({ error: 'Storage not available' });
         return;
       }
-      chrome.storage.local.get([key, ytKey], (result) => {
-        console.log('get_current_tab_position result:', result[key] ? 'FOUND' : result[ytKey] ? 'FOUND_YT' : 'NOT FOUND');
-        sendResponse({ position: result[ytKey] || result[key] });
+      chrome.storage.local.get([ytKey], (result) => {
+        console.log('get_current_tab_position result:', result[ytKey] ? 'FOUND_YT' : 'NOT FOUND');
+        sendResponse({ position: result[ytKey] || null });
       });
     });
     return true;
   }
 
   if (request.action === 'get_extension_enabled') {
-    // Check if extension is enabled for a URL
+    // Check if extension is enabled for a URL. Channel pages are enabled at their
+    // channel root so a single add covers /videos, /shorts, and all other tabs.
     const { url } = request;
-    const normalizedUrl = normalizeUrl(url);
-    console.log('get_extension_enabled:', { url, normalizedUrl });
+    const enabledUrl = getEnabledUrl(url);
+    console.log('get_extension_enabled:', { url, enabledUrl });
 
     if (!chrome.storage || !chrome.storage.local) {
       console.error('chrome.storage.local not available');
@@ -247,18 +253,19 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
 
     chrome.storage.local.get(['enabled_sites'], (result) => {
       const enabledSites = result.enabled_sites || {};
-      const isEnabled = !!enabledSites[normalizedUrl];
-      console.log('get_extension_enabled result:', { isEnabled, enabled: !!enabledSites[normalizedUrl] });
+      const isEnabled = !!enabledSites[enabledUrl];
+      console.log('get_extension_enabled result:', { isEnabled, enabled: !!enabledSites[enabledUrl] });
       sendResponse({ enabled: isEnabled });
     });
     return true;
   }
 
   if (request.action === 'set_extension_enabled') {
-    // Set extension enabled/disabled for a URL
+    // Set extension enabled/disabled for a URL. Channel pages toggle at their
+    // channel root, so enabling/disabling applies to the whole channel.
     const { url, enabled } = request;
-    const normalizedUrl = normalizeUrl(url);
-    console.log('set_extension_enabled:', { url, normalizedUrl, enabled });
+    const enabledUrl = getEnabledUrl(url);
+    console.log('set_extension_enabled:', { url, enabledUrl, enabled });
 
     if (!chrome.storage || !chrome.storage.local) {
       console.error('chrome.storage.local not available');
@@ -270,9 +277,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
       const enabledSites = result.enabled_sites || {};
 
       if (enabled) {
-        enabledSites[normalizedUrl] = true;
+        enabledSites[enabledUrl] = true;
       } else {
-        delete enabledSites[normalizedUrl];
+        delete enabledSites[enabledUrl];
       }
 
       chrome.storage.local.set({ enabled_sites: enabledSites }, () => {
@@ -308,27 +315,41 @@ function migrateToEnabledSites() {
       return;
     }
 
+    // Compile existing data to the channel-prefix model: per-tab channel keys
+    // (/@handle/videos, /@handle/shorts) collapse into one channel-root key so a
+    // channel only needs to be added once. Channels that have a saved position
+    // are auto-enabled at their root so existing saves keep working across tabs.
     const enabledSites = items.enabled_sites || {};
-    let migrated = 0;
+    const newEnabled = {};
+    let changed = false;
+
+    for (const [key] of Object.entries(enabledSites)) {
+      const root = getChannelRootUrl(key);
+      if (root) {
+        if (key !== root) changed = true;
+        newEnabled[root] = true;
+      } else {
+        newEnabled[key] = true;
+      }
+    }
 
     for (const key of Object.keys(items)) {
-      if (key.startsWith('reading_position_') || key.startsWith('yt_position_')) {
-        const normalizedUrl = key.startsWith('reading_position_')
-          ? key.slice('reading_position_'.length)
-          : key.slice('yt_position_'.length);
-        if (!enabledSites[normalizedUrl]) {
-          enabledSites[normalizedUrl] = true;
-          migrated++;
+      if (key.startsWith('yt_position_')) {
+        const url = key.slice('yt_position_'.length);
+        const root = getChannelRootUrl(url);
+        if (root && !newEnabled[root]) {
+          newEnabled[root] = true;
+          changed = true;
         }
       }
     }
 
-    if (migrated > 0) {
-      chrome.storage.local.set({ enabled_sites: enabledSites }, () => {
-        console.log(`Migration: added ${migrated} sites to enabled_sites`);
+    if (changed) {
+      chrome.storage.local.set({ enabled_sites: newEnabled }, () => {
+        console.log(`Migration: enabled_sites compiled to channel roots, count: ${Object.keys(newEnabled).length}`);
       });
     } else {
-      console.log('Migration: no new sites to migrate');
+      console.log('Migration: enabled_sites already channel-aware');
     }
   });
 }
@@ -349,4 +370,5 @@ if (chrome.alarms) {
 chrome.runtime.onStartup.addListener(() => {
   console.log('Scroll Saver background script starting up');
   cleanupOldEntries();
+  migrateToEnabledSites();
 });
