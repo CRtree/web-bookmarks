@@ -22,6 +22,8 @@ cp content.js "${TARGET_DIR}/"
 cp background.js "${TARGET_DIR}/"
 cp popup.html "${TARGET_DIR}/"
 cp popup.css "${TARGET_DIR}/"
+cp popup-classic.html "${TARGET_DIR}/"
+cp popup-classic.css "${TARGET_DIR}/"
 cp popup.js "${TARGET_DIR}/"
 cp LICENSE "${TARGET_DIR}/"
 

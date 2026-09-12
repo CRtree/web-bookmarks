@@ -137,17 +137,66 @@
     return `yt_position_${normalizedUrl}`;
   }
 
-  function saveYouTubePosition(videoId, type) {
+  // Display length, e.g. "3:32" or "1:12:00".
+  const DURATION_RE = /^(?:\d{1,2}:)?\d{1,2}:\d{2}$/;
+
+  // The badge YouTube paints over a thumbnail. Class names change between
+  // releases, so it is tried first but never relied upon.
+  const DURATION_BADGE_SEL =
+    '.ytBadgeShapeText, ytd-thumbnail-overlay-time-status-renderer, [class*="time-status"]';
+
+  // How many ancestor levels the rename-proof fallback may scan. Bounded so it
+  // stays inside the card: at grid level a duration belongs to a different video.
+  const DURATION_SCAN_DEPTH = 3;
+
+  // Best-effort read of the clicked video's length, for the popup's thumbnail
+  // badge. Returns null when nothing matches — the popup then omits the badge.
+  // (Shorts cards carry no duration at all, so they never get one.)
+  function readCardDuration(anchor) {
+    try {
+      let card = anchor;
+      for (let depth = 0; depth < 8 && card && card.parentElement; depth++) {
+        card = card.parentElement;
+
+        const badge = card.querySelector(DURATION_BADGE_SEL);
+        if (badge) {
+          const text = (badge.textContent || '').trim();
+          if (DURATION_RE.test(text)) return text;
+        }
+
+        // Fallback that survives a class rename: the duration is the only
+        // childless element in the card whose entire text is a timestamp.
+        // Matching a leaf's whole text keeps this exact — it cannot pick up a
+        // time embedded in a title — and staying near the card stops it from
+        // reaching a neighbouring video's badge in a grid container.
+        if (depth < DURATION_SCAN_DEPTH) {
+          for (const el of card.querySelectorAll('span, div, yt-formatted-string')) {
+            if (el.children.length) continue;
+            const text = (el.textContent || '').trim();
+            if (DURATION_RE.test(text)) return text;
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[SS:yt] Duration scrape failed:', e);
+    }
+    return null;
+  }
+
+  function saveYouTubePosition(videoId, type, duration) {
     if (!videoId || !isExtensionValid()) return;
     const key = getYouTubeStorageKey(currentUrl);
     // type is 'video' (default) or 'shorts'. Back-compat: entries written before
     // this field existed have no type, so the popup/DOM code treats it as 'video'.
     const data = { videoId, type: type || 'video', timestamp: Date.now() };
+    // Optional, and purely additive: entries saved before this existed, or where
+    // the scrape failed, just render without a duration badge.
+    if (duration) data.duration = duration;
     chrome.storage.local.set({ [key]: data }, () => {
       if (chrome.runtime.lastError) {
         console.error('[SS:yt] Error saving YouTube position:', chrome.runtime.lastError);
       } else {
-        console.log('[SS:yt] ✅ Saved videoId:', videoId, '(type=', data.type + ')');
+        console.log('[SS:yt] ✅ Saved videoId:', videoId, '(type=', data.type + ', duration=', (data.duration || 'n/a') + ')');
       }
     });
   }
@@ -456,7 +505,7 @@
 
     // Save the content ID + type only — no scroll position. On restore, we scan
     // the channel for this card and scroll it back into view.
-    saveYouTubePosition(videoId, mediaType);
+    saveYouTubePosition(videoId, mediaType, readCardDuration(link));
   }
 
   // Manage click-to-save listener lifecycle: attach only when on a YouTube channel page.

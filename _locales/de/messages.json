@@ -1,5 +1,8 @@
 {
+  "name": {
+    "message": "Scroll-Speicher für YouTube™"
+  },
   "description": {
-    "message": "Merkt sich das zuletzt angeklickte Video auf YouTube-Kanälen und stellt es wieder her, wenn Sie zurückkehren."
+    "message": "Speichere deine Position auf jedem YouTube-Kanal. Beim Zurückkehren springst du direkt zum zuletzt gesehenen Video oder Short."
   }
 }

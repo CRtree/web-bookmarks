@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Youtube Scroll Saver</title>
+  <link rel="stylesheet" href="popup-classic.css">
+</head>
+
+<body data-layout="classic">
+  <div class="container">
+
+    <header class="masthead">
+      <h1 class="masthead-title">Youtube Scroll Saver</h1>
+      <div class="masthead-rule"></div>
+      <p class="masthead-tagline">ADD the channel you want to remember.</p>
+    </header>
+
+    <section class="card">
+      <div class="card-header">
+        <h2 class="card-label">Current Page</h2>
+        <button id="add-page" class="btn btn-add">Add</button>
+      </div>
+      <div class="card-body">
+        <div id="current-info">
+          <p class="entry-loading">Loading&hellip;</p>
+        </div>
+        <div class="entry-actions">
+          <button id="refresh" class="btn">Refresh</button>
+          <button id="clear-current" class="btn btn-danger" disabled>Delete</button>
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-header">
+        <h2 class="card-label">Stored</h2>
+        <div class="card-header-right">
+          <span class="card-count"><span id="stats-count">0</span> positions</span>
+          <button id="clear-all" class="btn-text">Delete all</button>
+        </div>
+      </div>
+      <div id="positions-list">
+        <p class="empty-state">No saved positions yet</p>
+      </div>
+    </section>
+
+    <footer class="footer">
+      <div class="footer-actions">
+        <button id="export-log" class="btn btn-utility">Export Log</button>
+        <button id="layout-toggle" class="btn btn-utility" title="Switch to the compact layout">Compact</button>
+        <button id="theme-toggle" class="btn btn-utility">Dark</button>
+      </div>
+    </footer>
+
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+
+</html>

@@ -46,6 +46,62 @@ document.addEventListener('DOMContentLoaded', function() {
   const statsCountEl = document.getElementById('stats-count');
   const addPageBtn = document.getElementById('add-page');
 
+  // ---- Layout ----
+  // Two complete popup pages share this script:
+  //   popup.html         "modern"  — compact two-column (popup.css)
+  //   popup-classic.html "classic" — editorial single-column (popup-classic.css)
+  // manifest.json points default_popup at the modern page, so a fresh install
+  // opens it with no redirect. Switching calls chrome.action.setPopup so the
+  // choice survives restarts, stores the preference, and navigates so it takes
+  // effect without reopening.
+  const LAYOUTS = { modern: 'popup.html', classic: 'popup-classic.html' };
+  const DEFAULT_LAYOUT = 'modern';
+  const pageLayout = document.body.dataset.layout === 'classic' ? 'classic' : 'modern';
+  const layoutToggleBtn = document.getElementById('layout-toggle');
+
+  function readStoredLayout(cb) {
+    if (!chrome.storage || !chrome.storage.local) return cb(null);
+    chrome.storage.local.get(['layout'], function(result) {
+      if (chrome.runtime.lastError) return cb(null);
+      const v = result && result.layout;
+      cb(v === 'classic' || v === 'modern' ? v : null);
+    });
+  }
+
+  function saveLayout(layout) {
+    if (chrome.storage && chrome.storage.local) chrome.storage.local.set({ layout: layout });
+    if (chrome.action && chrome.action.setPopup) {
+      chrome.action.setPopup({ popup: LAYOUTS[layout] });
+    }
+  }
+
+  if (layoutToggleBtn) {
+    layoutToggleBtn.addEventListener('click', function() {
+      const next = pageLayout === 'classic' ? 'modern' : 'classic';
+      saveLayout(next);
+      console.log('Popup: switching layout to', next);
+      window.location.replace(LAYOUTS[next]);
+    });
+  }
+
+  // Re-assert the stored preference over default_popup. chrome.action.setPopup
+  // normally persists, but an extension update can reset it; this self-heals.
+  // Navigating here is loop-free: we only ever redirect to the page matching
+  // the target, which then finds itself already correct.
+  readStoredLayout(function(stored) {
+    const target = stored || DEFAULT_LAYOUT;
+    if (stored !== target && chrome.storage && chrome.storage.local) {
+      chrome.storage.local.set({ layout: target });
+    }
+    if (chrome.action && chrome.action.setPopup) {
+      chrome.action.setPopup({ popup: LAYOUTS[target] });
+    }
+    if (target !== pageLayout) {
+      console.log('Popup: layout preference is', target, '- redirecting');
+      window.location.replace(LAYOUTS[target]);
+    }
+  });
+
   // YouTube play icon (inline SVG)
   const PLAY_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:3px;" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
 
@@ -69,18 +125,15 @@ document.addEventListener('DOMContentLoaded', function() {
   // Theme
   const themeToggleBtn = document.getElementById('theme-toggle');
   function applyTheme(theme) {
-    if (theme === 'dark') {
-      document.body.classList.add('theme-dark');
-      if (themeToggleBtn) {
-        themeToggleBtn.textContent = '\u2600';
-        themeToggleBtn.title = 'Switch to light';
-      }
-    } else {
-      document.body.classList.remove('theme-dark');
-      if (themeToggleBtn) {
-        themeToggleBtn.textContent = '\u263E';
-        themeToggleBtn.title = 'Switch to dark';
-      }
+    const isDark = theme === 'dark';
+    // Classic labels the button ("\u2600 Light"); compact shows the icon only.
+    const label = pageLayout === 'classic'
+      ? (isDark ? '\u2600 Light' : '\u263E Dark')
+      : (isDark ? '\u2600' : '\u263E');
+    document.body.classList.toggle('theme-dark', isDark);
+    if (themeToggleBtn) {
+      themeToggleBtn.textContent = label;
+      themeToggleBtn.title = isDark ? 'Switch to light' : 'Switch to dark';
     }
   }
   function loadTheme() {
@@ -101,6 +154,52 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   }
   loadTheme();
+
+  // ---- Video previews ----
+  // Always on: thumbnails are enrichment, not a user decision. The URL is derived
+  // from the videoId already in storage, so this also lights up entries saved
+  // before the feature existed. Note this is the extension's ONLY network
+  // request — see the Privacy section of the README.
+  function thumbnailUrl(videoId) {
+    return 'https://i.ytimg.com/vi/' + encodeURIComponent(videoId) + '/mqdefault.jpg';
+  }
+
+  // Only ever trust a validated "mm:ss" / "h:mm:ss" from storage.
+  function formatDuration(value) {
+    return typeof value === 'string' && /^(?:\d{1,2}:)?\d{1,2}:\d{2}$/.test(value) ? value : '';
+  }
+
+  // Thumbnail + optional duration badge for a saved entry. Returns '' when the
+  // entry has no videoId, so callers can inline it unconditionally.
+  function thumbnailHtml(position) {
+    if (!position || !position.videoId) return '';
+    const duration = formatDuration(position.duration);
+    const badge = duration ? `<span class="entry-duration">${duration}</span>` : '';
+    return `<a class="entry-thumb" href="${getYouTubeContentLink(position)}" target="_blank" tabindex="-1" aria-hidden="true">`
+      + `<img src="${thumbnailUrl(position.videoId)}" alt="" loading="lazy" referrerpolicy="no-referrer">${badge}</a>`;
+  }
+
+  // Drop a thumbnail that fails to load (offline, request blocked). Inline onerror
+  // attributes are blocked by the MV3 CSP, so wire it up after insert. The entry
+  // also loses its grid slot via .no-thumb, otherwise the classic layout would
+  // leave an empty column where the preview used to be.
+  //
+  // Note: a deleted/private video does NOT land here — i.ytimg.com answers 404 with
+  // a small (120px) placeholder JPEG, which decodes fine and fires load, not error.
+  function wireThumbnailFallbacks(root) {
+    if (!root) return;
+    root.querySelectorAll('.entry-thumb img').forEach(function(img) {
+      const hide = function() {
+        const thumb = img.closest('.entry-thumb');
+        if (thumb) thumb.style.display = 'none';
+        const entry = img.closest('.entry');
+        if (entry) entry.classList.add('no-thumb');
+      };
+      img.addEventListener('error', hide);
+      // A cached failure can complete before this listener is attached.
+      if (img.complete && img.naturalWidth === 0) hide();
+    });
+  }
 
   // Test background script connection
   function testBackgroundConnection() {
@@ -217,8 +316,10 @@ document.addEventListener('DOMContentLoaded', function() {
                 const displayTitle = isYT
                   ? `<a href="${getYouTubeContentLink(currentTabPosition)}" target="_blank" class="entry-link">${PLAY_ICON}${currentTabPosition.videoId}</a>`
                   : truncate(tab.title || 'Untitled', 40);
+                const thumb = thumbnailHtml(currentTabPosition);
                 html = `
-                  <div class="entry">
+                  <div class="entry${thumb ? '' : ' no-thumb'}">
+                    ${thumb}
                     <div class="entry-title">${displayTitle}</div>
                     <div class="entry-url">${truncatePrefix(currentTabUrl, 30)}</div>
                     <div class="entry-meta">${formatDate(currentTabPosition.timestamp)}</div>
@@ -228,7 +329,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 console.log('Popup: Showing saved position for current tab');
               } else {
                 html = `
-                  <div class="entry">
+                  <div class="entry no-thumb">
                     <div class="entry-title">${truncate(tab.title || 'Untitled', 50)}</div>
                     <div class="entry-url">${truncatePrefix(currentTabUrl, 30)}</div>
                     ${isTracking
@@ -242,6 +343,7 @@ document.addEventListener('DOMContentLoaded', function() {
               }
 
               currentInfoEl.innerHTML = html;
+              wireThumbnailFallbacks(currentInfoEl);
             }
           );
         }
@@ -304,22 +406,33 @@ document.addEventListener('DOMContentLoaded', function() {
       const title = isYT
         ? `<a href="${getYouTubeContentLink(position)}" target="_blank" class="entry-link">${PLAY_ICON}${position.videoId}</a>`
         : truncate(position.title || 'Untitled', 40);
-      html += `
-        <div class="entry" data-url="${url}">
-          <div class="entry-main">
+
+      const details = `
             <div class="entry-title" title="${titleText}">${title}</div>
             <div class="entry-url" title="${url}">${truncatePrefix(url, 48)}</div>
-            <div class="entry-meta">${formatDate(position.timestamp)}</div>
-          </div>
-          <div class="entry-actions">
-            <button class="icon-btn goto" data-url="${url}" title="Go to page">\u2197</button>
-            <button class="icon-btn danger clear-one" data-url="${url}" title="Delete">\u2715</button>
+            <div class="entry-meta">${formatDate(position.timestamp)}</div>`;
+
+      // Compact puts the details in a flex child so the icon actions sit beside
+      // them; classic uses the original full-width text buttons underneath.
+      const main = pageLayout === 'classic' ? details : `<div class="entry-main">${details}</div>`;
+      const actions = pageLayout === 'classic'
+        ? `<button class="btn goto" data-url="${url}">Go to Page</button>
+            <button class="btn btn-danger clear-one" data-url="${url}">Delete</button>`
+        : `<button class="icon-btn goto" data-url="${url}" title="Go to page">\u2197</button>
+            <button class="icon-btn danger clear-one" data-url="${url}" title="Delete">\u2715</button>`;
+
+      const thumb = thumbnailHtml(position);
+      html += `
+        <div class="entry${thumb ? '' : ' no-thumb'}" data-url="${url}">
+          ${thumb}${main}
+          <div class="entry-actions">${actions}
           </div>
         </div>
       `;
     });
 
     positionsListEl.innerHTML = html;
+    wireThumbnailFallbacks(positionsListEl);
 
     // Add event listeners to the new buttons
     document.querySelectorAll('.clear-one').forEach(btn => {
@@ -500,6 +613,8 @@ document.addEventListener('DOMContentLoaded', function() {
   if (themeToggleBtn) {
     themeToggleBtn.addEventListener('click', toggleTheme);
   }
+
+  // Video previews are always on, so there is no toggle to wire up.
 
   // Initialize
   testBackgroundConnection();

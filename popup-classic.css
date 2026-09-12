@@ -1,0 +1,522 @@
+/* ================================================================
+   Youtube Scroll Saver — Editorial Typesetting Theme
+   ("Classic" layout, restored from v1.1.x)
+
+   Loaded only by popup-classic.html. The compact layout lives in popup.css.
+   Users switch between the two via the toggle in the popup.
+   ================================================================ */
+
+:root {
+  --color-bg: #f5f1ea;
+  --color-surface: #fdfbf7;
+  --color-text: #2d2416;
+  --color-text-secondary: #695437;
+  --color-text-tertiary: #847258;
+  --color-border: #e6ddd0;
+  --color-border-light: #efe8dd;
+  --color-accent: #d42020;
+  --color-accent-hover: #b01818;
+  --color-danger: #9b3a3a;
+  --color-danger-hover: #b54c4c;
+  --color-success: #4a6741;
+  /* No webfonts: the original design pulled Playfair Display + Source Serif 4
+     from fonts.googleapis.com, which contradicts the extension's zero-network
+     privacy promise and adds ~300 KB. These system serif stacks keep the
+     editorial feel without the request. */
+  --font-display: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, 'Times New Roman', serif;
+  --font-body: Georgia, 'Times New Roman', 'Iowan Old Style', serif;
+}
+
+/* ---- Reset ---- */
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: var(--font-body);
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--color-text);
+  background: var(--color-bg);
+  width: 360px;
+  min-height: 500px;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  transition: background-color 0.3s ease, color 0.3s ease;
+}
+
+/* ---- Dark Theme ---- */
+
+body.theme-dark {
+  --color-bg: #1a1713;
+  --color-surface: #282420;
+  --color-text: #e4dccf;
+  --color-text-secondary: #bdb5a5;
+  --color-text-tertiary: #908878;
+  --color-border: #3d3730;
+  --color-border-light: #322d26;
+  --color-accent: #ff5555;
+  --color-accent-hover: #ff7878;
+  --color-danger: #c45a5a;
+  --color-danger-hover: #d87272;
+  --color-success: #7a9c6b;
+}
+
+.container {
+  padding: 28px 22px 22px;
+}
+
+/* ---- Masthead ---- */
+
+.masthead {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  margin-bottom: 30px;
+}
+
+.masthead-title {
+  font-family: var(--font-display);
+  font-size: 25px;
+  font-weight: 700;
+  color: var(--color-text);
+  letter-spacing: 0.03em;
+  line-height: 1.15;
+  animation: fadeUp 0.55s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+.masthead-rule {
+  width: 52px;
+  height: 1px;
+  background: var(--color-accent);
+  margin: 14px auto;
+  opacity: 0.35;
+  animation: fadeUp 0.55s 0.08s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+.masthead-tagline {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-style: italic;
+  color: var(--color-text-secondary);
+  letter-spacing: 0.04em;
+  animation: fadeUp 0.55s 0.14s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+/* ---- Card ---- */
+
+.card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 18px 16px;
+  margin-bottom: 14px;
+  animation: fadeUp 0.5s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+.card:nth-of-type(1) {
+  animation-delay: 0.22s;
+}
+
+.card:nth-of-type(2) {
+  animation-delay: 0.32s;
+}
+
+.card-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 14px;
+}
+
+.card-label {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+
+.card-count {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-style: italic;
+  color: var(--color-text-secondary);
+}
+
+.card-count span {
+  font-weight: 600;
+  font-style: normal;
+  color: var(--color-accent);
+}
+
+.card-header-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.btn-text {
+  font-family: var(--font-body);
+  font-size: 12px;
+  background: none;
+  border: none;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.2s ease;
+}
+
+.btn-text:hover {
+  color: var(--color-danger);
+}
+
+/* ---- Entry (position item) ---- */
+
+.entry {
+  padding: 14px 0;
+  border-bottom: 1px solid var(--color-border-light);
+}
+
+.entry:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.entry:first-child {
+  padding-top: 0;
+}
+
+.entry-title {
+  font-family: var(--font-body);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--color-text);
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.35;
+}
+
+.entry-url {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-style: italic;
+  color: var(--color-text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  margin-bottom: 4px;
+}
+
+.entry-meta {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-style: italic;
+  color: var(--color-text-tertiary);
+}
+
+.entry-note {
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-style: italic;
+  color: var(--color-text-tertiary);
+  margin-top: 4px;
+}
+
+.entry-status {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-style: italic;
+  color: var(--color-success);
+  margin-top: 4px;
+}
+
+.entry-loading {
+  font-family: var(--font-body);
+  font-style: italic;
+  color: var(--color-text-tertiary);
+  padding: 8px 0;
+  font-size: 14px;
+}
+
+/* YouTube video link */
+.entry-link {
+  color: var(--color-accent);
+  text-decoration: none;
+  border-bottom: 1px dotted var(--color-text-tertiary);
+  transition: border-color 0.2s ease, color 0.2s ease;
+}
+
+.entry-link:hover {
+  color: var(--color-accent-hover);
+  border-bottom-color: var(--color-accent);
+}
+
+/* Entry actions (Refresh / Delete) */
+.entry-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+/* ---- Buttons ---- */
+
+.btn {
+  font-family: var(--font-body);
+  font-size: 13px;
+  font-weight: 500;
+  padding: 5px 11px;
+  border: 1px solid var(--color-border);
+  border-radius: 5px;
+  background: var(--color-surface);
+  color: var(--color-text);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+  line-height: 1.3;
+}
+
+.btn:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+}
+
+.btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
+.btn-danger {
+  border-color: transparent;
+  background: transparent;
+  color: var(--color-text-tertiary);
+}
+
+.btn-danger:hover {
+  color: var(--color-danger);
+  border-color: transparent;
+  background: transparent;
+}
+
+.btn-utility {
+  font-size: 12px;
+  padding: 5px 10px;
+  background: transparent;
+  border: 1px solid var(--color-border-light);
+  color: var(--color-text-tertiary);
+  transition: all 0.2s ease;
+}
+
+.btn-utility:hover {
+  border-color: var(--color-text-secondary);
+  color: var(--color-text-secondary);
+}
+
+.btn-icon {
+  font-size: 15px;
+  line-height: 1;
+  padding: 4px 8px;
+  background: transparent;
+  border: 1px solid var(--color-border-light);
+  border-radius: 5px;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-icon:hover {
+  border-color: var(--color-text-secondary);
+  color: var(--color-text-secondary);
+}
+
+/* ---- Add Button ---- */
+
+.btn-add {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  padding: 4px 12px;
+  border: 1px solid var(--color-accent);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-accent);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  white-space: nowrap;
+}
+
+.btn-add:hover {
+  background: var(--color-accent);
+  color: var(--color-surface);
+}
+
+.btn-add.btn-added {
+  background: var(--color-accent);
+  color: var(--color-surface);
+}
+
+.btn-add.btn-added:hover {
+  background: transparent;
+  color: var(--color-accent);
+}
+
+/* ---- Positions List ---- */
+
+#positions-list {
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.empty-state {
+  text-align: center;
+  padding: 32px 16px;
+  font-family: var(--font-body);
+  font-style: italic;
+  color: var(--color-text-tertiary);
+  font-size: 15px;
+}
+
+/* ---- Footer ---- */
+
+.footer {
+  margin-top: 8px;
+  text-align: center;
+  animation: fadeUp 0.5s 0.42s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+.footer-help {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.65;
+  color: var(--color-text-tertiary);
+  margin-bottom: 14px;
+  padding: 0 6px;
+}
+
+.footer-actions {
+  display: flex;
+  justify-content: center;
+  gap: 8px;
+  /* Four utility buttons; wrap rather than overflow at narrow widths. */
+  flex-wrap: wrap;
+}
+
+/* ---- Video previews ---- */
+
+/* The classic cards are narrow (316px) and the popup already exceeds Chrome's
+   600px cap, so previews sit BESIDE the text rather than above it. A 96x54 thumb
+   fits inside the height the text already occupies, so previews do not grow the
+   popup. Full-width previews pushed content from 689px to 858px and produced
+   nested scrollbars. */
+.entry {
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  column-gap: 12px;
+}
+
+/* No preview available (no videoId, or the image failed): fall back to the plain
+   stacked layout rather than leaving an empty 96px column. */
+.entry.no-thumb {
+  display: block;
+}
+
+.entry-thumb {
+  position: relative;
+  display: block;
+  grid-column: 1;
+  grid-row: 1 / span 3;
+  align-self: start;
+  width: 96px;
+  height: 54px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--color-border-light);
+}
+
+.entry-title {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.entry-url {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.entry-meta {
+  grid-column: 2;
+  grid-row: 3;
+}
+
+#positions-list .entry-actions {
+  grid-column: 2;
+  grid-row: 4;
+}
+
+.entry-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.entry-duration {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.78);
+  color: #fff;
+  font-family: var(--font-body);
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 16px;
+  letter-spacing: 0.02em;
+}
+
+#theme-toggle {
+  font-size: 12px;
+}
+
+/* ---- Scrollbar ---- */
+
+::-webkit-scrollbar {
+  width: 4px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 2px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-tertiary);
+}
+
+/* ---- Animations ---- */
+
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}

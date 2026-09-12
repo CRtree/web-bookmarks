@@ -439,6 +439,49 @@ body {
   border-bottom: none;
 }
 
+/* ---- Video previews ---- */
+
+/* Stored-list rows are flex, so the preview sits beside the details at 72x40.
+   The Current panel stacks its entry, so there the preview spans the width. */
+.entry-thumb {
+  position: relative;
+  display: block;
+  flex-shrink: 0;
+  width: 72px;
+  height: 40px;
+  border-radius: 4px;
+  overflow: hidden;
+  background: var(--surface-2);
+}
+
+.entry-thumb img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.current-info .entry-thumb {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  margin-bottom: 8px;
+}
+
+.entry-duration {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  padding: 0 4px;
+  border-radius: 3px;
+  background: rgba(0, 0, 0, 0.78);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 15px;
+  letter-spacing: 0.02em;
+}
+
 /* ---- Scrollbar ---- */
 
 ::-webkit-scrollbar {

@@ -1,10 +1,14 @@
 {
   "name": "web-bookmarks",
   "version": "1.0.0",
-  "description": "> Never lose your place again. Automatically save and restore your reading position on any article or long web page.",
+  "description": "Chrome extension that remembers your scroll position on YouTube channels and restores it when you return.",
   "main": "background.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
+    "verify:i18n": "node tools/verify-i18n.mjs",
+    "verify:layout": "node tools/verify-layout.mjs",
+    "verify:duration": "node tools/verify-duration.mjs",
+    "screenshots": "node tools/screenshot-layouts.mjs",
     "package": "./package.sh",
     "assets": "bash tools/marketing/build.sh"
   },
@@ -12,7 +16,12 @@
     "type": "git",
     "url": "git+https://github.com/CRtree/web-bookmarks.git"
   },
-  "keywords": [],
+  "keywords": [
+    "youtube",
+    "scroll position",
+    "resume",
+    "chrome extension"
+  ],
   "author": "",
   "license": "ISC",
   "bugs": {

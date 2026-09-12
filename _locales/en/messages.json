@@ -1,5 +1,8 @@
 {
+  "name": {
+    "message": "Scroll Saver for YouTube™"
+  },
   "description": {
-    "message": "Remembers the last video you clicked on YouTube channels — restores it when you return."
+    "message": "Save your spot on any YouTube channel. Reopen it and jump straight back to the last video or Short you watched."
   }
 }
