@@ -44,19 +44,19 @@ A focused alternative to generic "scroll position saver" tools: it does one thin
 
 The popup ships in two layouts and remembers your choice.
 
-| | Compact (default) | Classic |
+| | Vertical Menu (default) | Extended |
 |---|---|---|
 | Look | Two columns, system sans-serif | Editorial single column, system serif |
-| Size | 640×400 | 360×689 (scrolls past Chrome's 600px cap) |
-| Toggle | ☰ in the top bar | "Compact" in the footer |
+| Size | 640×400 | 360×scrolls (full-width previews exceed Chrome's 600px cap) |
+| Toggle | ☰ in the top bar | "Vertical Menu" in the footer |
 
-`manifest.json` points `default_popup` at `popup.html`, so a fresh install opens the compact
-layout with no redirect. The choice is saved in `chrome.storage.local` (`layout`) and
+`manifest.json` points `default_popup` at `popup.html`, so a fresh install opens the vertical
+menu layout with no redirect. The choice is saved in `chrome.storage.local` (`layout`) and
 applied via `chrome.action.setPopup`, so it persists across restarts. Both layouts share
 `popup.js` and differ only in markup and stylesheet:
 
-- `popup.html` + `popup.css` — compact two-column (default)
-- `popup-classic.html` + `popup-classic.css` — editorial single column
+- `popup.html` + `popup.css` — Vertical Menu, two-column (default)
+- `popup-classic.html` + `popup-classic.css` — Extended, editorial single column
 
 Changing the default means updating **both** `default_popup` in `manifest.json` and
 `DEFAULT_LAYOUT` in `popup.js`; existing users keep whatever they have chosen.
@@ -67,19 +67,17 @@ Every saved entry shows a thumbnail and, when it could be scraped at save time, 
 badge. There is no toggle — previews are always on. See
 [Privacy](#-privacy--security) for the network implication.
 
-Except for the compact Current panel, where the preview spans the width, previews sit beside
-the text rather than above it:
+Every saved entry leads with a full-width preview; the text stacks beneath it:
 
 | Layout | Preview | Size |
 |---|---|---|
-| Classic, both panels | beside the text | 96×54 |
-| Compact, Current panel | full width | ~170×96 |
-| Compact, Stored list | beside the details | 72×40 |
+| Extended, both panels | full width, above the text | 16:9 (≈316×178) |
+| Vertical Menu, Current panel | full width | 16:9 |
+| Vertical Menu, Stored list | beside the video ID | 168×94 |
 
-Previews are deliberately height-neutral in the classic layout: a full-width thumbnail grew
-that popup from 689px to 858px, which is far past Chrome's 600px cap and produced nested
-scrollbars. When a thumbnail is unavailable the row gets `.no-thumb` and reverts to the plain
-stacked layout instead of leaving an empty column.
+Because the Extended popup now carries full-width previews it grows past Chrome's 600px cap and
+scrolls as a single column; the stored list no longer keeps its own scrollbar. When a thumbnail
+is unavailable the entry gets `.no-thumb` and simply renders without it.
 
 Durations are copied from the clicked card on the channel page and are best-effort. YouTube's
 badge class names change between releases, so there is a rename-proof fallback: the duration is
@@ -156,6 +154,7 @@ scroll-saver/
 ├── test_youtube_live.mjs     # Live automation test (YouTube channel click-save/restore)
 ├── tools/verify-i18n.mjs     # Validates locale codes and message resolution
 ├── tools/verify-layout.mjs   # Layout toggle + previews, end to end
+├── tools/verify-click-save.mjs # Regression: saving only on added channels
 ├── tools/verify-duration.mjs # Live test: duration scraped from a real channel
 ├── tools/screenshot-layouts.mjs  # Renders every layout/theme for review
 ├── package.sh            # Build script
@@ -305,18 +304,20 @@ When adding a locale:
 
 ## ✅ Verification
 
-Three scripts, all runnable from the repo root:
+Four scripts, all runnable from the repo root:
 
 | Script | Covers | Needs network |
 |---|---|---|
 | `npm run verify:i18n` | Locale codes, JSON shape, 132-char limit, live message resolution | no |
 | `npm run verify:layout` | Manifest default popup, layout toggle + persistence, previews, thumbnail fallback | yes (CDN) |
+| `npm run verify:click-save` | Click-to-save is armed only for added channels; Add/Stop apply live | no |
 | `npm run verify:duration` | Scrapes a duration from a real channel page and asserts it is what got saved | yes (YouTube) |
 
 Each loads the real extension in Chromium rather than unit-testing in isolation — `/verify:layout`
-clicks the actual toggle button and checks `chrome.action.getPopup()`, and `/verify:duration`
+clicks the actual toggle button and checks `chrome.action.getPopup()`, `/verify:duration`
 dispatches the same `pointerdown` that `content.js` listens for, then reads the entry back out of
-`chrome.storage.local` from an extension page.
+`chrome.storage.local` from an extension page, and `/verify:click-save` serves a local
+YouTube-shaped fixture (no network) and drives the disabled → added → disabled lifecycle.
 
 Two gotchas worth knowing if you extend them:
 
@@ -327,6 +328,29 @@ Two gotchas worth knowing if you extend them:
 `npm run screenshots` renders every layout × theme to `/tmp/ss-layouts` for visual review.
 
 ## 📝 Changelog
+
+### v2.0.2 (2026)
+- **No stray saved videos** — click-to-save now runs only for channels you've actually added.
+  Previously an in-page (SPA) navigation could arm the click listener on a channel you never
+  added, so clicking one of its videos silently wrote a stored entry while the popup button
+  still read "Add". The enabled state is re-checked on every navigation and when the channel
+  is added/removed while the page is open. Covered by `npm run verify:click-save`.
+- **Restore refresh** — when the saved video isn't on screen, the page now reloads once and the
+  scan runs on the clean result, instead of scanning a page that was already open or scrolled.
+  This removes the repeated loading spinners, the scrambled card order, and the extra
+  auto-scroll that appeared when restoring without a manual refresh. The reload is recorded in
+  `sessionStorage`, so it happens exactly once and cannot loop; a card already on screen is
+  scrolled to directly. Restore also runs at most once per page per navigation, so the several
+  triggers (initial load, SPA navigation, history) cannot re-scroll or re-scan.
+- **Layout names** — the compact layout is now the **Vertical Menu** and the classic layout is
+  the **Extended** layout, in both toggle labels and these docs.
+- **Bigger compact previews** — the Vertical Menu stored list now leads each entry with a large
+  thumbnail, with the video ID beside it and the actions at the right.
+- **Extended full-width previews** — the Extended layout's previews now span the panel and sit
+  above the text, matching the requested look; the popup scrolls as a single column.
+- **Cleaner stored list** — stored entries keep the video ID and the clickable preview but drop
+  the full URL line; the address is still one click away via the go-to action.
+- **Removed timestamps** — the "last used" time is gone from both layouts.
 
 ### v2.0.1 (2026)
 - **Layout toggle** — the pre-2.0 editorial layout is back as a selectable option, so users who

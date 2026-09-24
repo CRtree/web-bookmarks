@@ -214,13 +214,6 @@ body.theme-dark {
   margin-bottom: 4px;
 }
 
-.entry-meta {
-  font-family: var(--font-body);
-  font-size: 13px;
-  font-style: italic;
-  color: var(--color-text-tertiary);
-}
-
 .entry-note {
   font-family: var(--font-body);
   font-size: 14px;
@@ -371,10 +364,8 @@ body.theme-dark {
 
 /* ---- Positions List ---- */
 
-#positions-list {
-  max-height: 220px;
-  overflow-y: auto;
-}
+/* No inner scroll: full-width previews make each entry tall, and a nested scroll
+   area on top of the popup's own scrollbar was awkward. The popup body scrolls. */
 
 .empty-state {
   text-align: center;
@@ -413,54 +404,18 @@ body.theme-dark {
 
 /* ---- Video previews ---- */
 
-/* The classic cards are narrow (316px) and the popup already exceeds Chrome's
-   600px cap, so previews sit BESIDE the text rather than above it. A 96x54 thumb
-   fits inside the height the text already occupies, so previews do not grow the
-   popup. Full-width previews pushed content from 689px to 858px and produced
-   nested scrollbars. */
-.entry {
-  display: grid;
-  grid-template-columns: 96px 1fr;
-  column-gap: 12px;
-}
-
-/* No preview available (no videoId, or the image failed): fall back to the plain
-   stacked layout rather than leaving an empty 96px column. */
-.entry.no-thumb {
-  display: block;
-}
-
+/* Full-width previews lead each entry, with the text stacked beneath. The classic
+   cards are narrow (316px), so a 16:9 preview is about 178px tall. */
 .entry-thumb {
   position: relative;
   display: block;
-  grid-column: 1;
-  grid-row: 1 / span 3;
-  align-self: start;
-  width: 96px;
-  height: 54px;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  margin-bottom: 10px;
   border-radius: 4px;
   overflow: hidden;
   background: var(--color-border-light);
-}
-
-.entry-title {
-  grid-column: 2;
-  grid-row: 1;
-}
-
-.entry-url {
-  grid-column: 2;
-  grid-row: 2;
-}
-
-.entry-meta {
-  grid-column: 2;
-  grid-row: 3;
-}
-
-#positions-list .entry-actions {
-  grid-column: 2;
-  grid-row: 4;
 }
 
 .entry-thumb img {

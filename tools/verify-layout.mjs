@@ -139,6 +139,9 @@ try {
       entryDisplay: getComputedStyle(entry).display,
     };
   });
+  // Vertical Menu stored entries are a flex row (preview, ID, actions) and stay
+  // flex when a preview is dropped; Extended stacks full-width previews and is
+  // block. Either way a missing preview never leaves an empty slot.
   const expectedDisplay = expectedDefault === 'classic' ? 'block' : 'flex';
   check(fallback?.thumbHidden, 'a failed thumbnail is hidden', JSON.stringify(fallback));
   check(fallback?.entryNoThumb, 'entry marked .no-thumb', JSON.stringify(fallback));
@@ -163,16 +166,14 @@ try {
   check(await page.locator('#preview-toggle').count() === 0,
     `no preview toggle in the ${newLayout} layout either`);
 
-  // Classic-specific layout guarantees. Whichever page classic happens to be, its
-  // entries use a preview grid that must collapse when a thumbnail is missing —
-  // otherwise the row keeps an empty 96px column. When classic IS the default this
-  // was already covered above; cover it here when classic is the other page.
+  // Classic-specific layout guarantee: full-width previews stack above the text,
+  // and a failed preview is simply removed (entry stays block either way).
   if (newLayout === 'classic') {
-    const usingGrid = await page.evaluate(() => {
+    const entryDisplay = await page.evaluate(() => {
       const e = document.querySelector('#positions-list .entry');
       return e ? getComputedStyle(e).display : null;
     });
-    check(usingGrid === 'grid', 'classic: entries use the preview grid', String(usingGrid));
+    check(entryDisplay === 'block', 'classic: entries stack the full-width preview', String(entryDisplay));
 
     const dropped = await page.evaluate(() => {
       const img = document.querySelector('#positions-list .entry-thumb img');
@@ -181,11 +182,11 @@ try {
       const entry = img.closest('.entry');
       return {
         noThumb: entry.classList.contains('no-thumb'),
-        display: getComputedStyle(entry).display,
+        thumbHidden: getComputedStyle(img.closest('.entry-thumb')).display === 'none',
       };
     });
-    check(dropped?.noThumb && dropped?.display === 'block',
-      'classic: a failed preview drops the row out of the grid', JSON.stringify(dropped));
+    check(dropped?.noThumb && dropped?.thumbHidden,
+      'classic: a failed preview is removed', JSON.stringify(dropped));
   }
 
   // ---- 5. Toolbar open self-heals to the stored layout ----

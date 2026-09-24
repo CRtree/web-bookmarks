@@ -38,10 +38,20 @@
   let currentUrl = window.location.href;
   let isRestoring = false;
   let isTrackingActive = false;
+  // Whether the extension is enabled (channel was added) for the URL currently
+  // loaded. Click-to-save must never run for a channel the user has not added.
+  let isEnabledForUrl = false;
   let clickListenerAttached = false;
   // Dedupe pointerdown + click firing for the same video link in quick succession.
   let lastHandledVideoHref = null;
   let lastHandledVideoTime = 0;
+
+  // Pages already restored in this document. Restore is requested from several
+  // places (initial load, SPA navigation, history changes), so acting once stops a
+  // second trigger from repeating the scroll or a second pre-scan reload. Cleared
+  // on every navigation (see observeUrlChanges) so a later visit to the same URL
+  // is handled again.
+  const restoredThisDocument = new Set();
 
   // YouTube video-ID scan state
   let ytScanTimer = null;
@@ -237,6 +247,58 @@
     console.log('[SS:yt] ✅ Scrolled to video at scrollY:', targetScrollY);
   }
 
+  // ---- Refresh before scan ----
+  // Reported issue: scanning for the saved video on a page that was already open
+  // (reached by YouTube's in-page navigation, or scrolled by an earlier scan)
+  // produced repeated loading spinners, a scrambled card order, and extra
+  // auto-scroll. A manual refresh fixes it, so whenever a scan is actually needed
+  // we reload once and scan the clean result.
+  //
+  // The marker lives in sessionStorage so it survives the reload. It is consumed
+  // at the START of the next restore, before anything can bail out. A card already
+  // on screen is scrolled to directly; every other case gets exactly one reload.
+  //
+  // Note this is NOT a "is the page still fresh?" guess — it never decides to
+  // skip a needed reload. Its only time element is a TTL on the marker itself, so
+  // a marker orphaned by an interrupted cycle (the user left before the
+  // post-reload restore ran) is ignored rather than replayed much later. An
+  // expired marker can only cause an extra reload, never a skipped one.
+  const SCAN_RELOAD_TTL_MS = 60000;
+
+  function restoreReloadKey(url) {
+    return 'ss_scan_reload_' + normalizeUrl(url);
+  }
+
+  // Consume the marker and report whether this restore follows our own reload.
+  // Call once per restore, before touching the DOM.
+  function consumeScanReload(url) {
+    try {
+      const key = restoreReloadKey(url);
+      const raw = sessionStorage.getItem(key);
+      if (raw === null) return false;
+      sessionStorage.removeItem(key);
+      const markedAt = Number(raw);
+      return Number.isFinite(markedAt) && (Date.now() - markedAt) < SCAN_RELOAD_TTL_MS;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  // Mark the URL and reload so the scan starts from a clean page. Returns false
+  // only when sessionStorage is unavailable — then a reload could not be tracked
+  // and the caller scans as-is rather than risk a loop.
+  function reloadForScan(url) {
+    try {
+      sessionStorage.setItem(restoreReloadKey(url), String(Date.now()));
+    } catch (e) {
+      console.warn('[SS:yt] sessionStorage unavailable — scanning without refresh');
+      return false;
+    }
+    console.log('[SS:yt] 🔄 Refreshing page before scan');
+    window.location.reload();
+    return true;
+  }
+
   function showYouTubeToast(message) {
     const toast = document.createElement('div');
     toast.style.cssText = 'position:fixed;bottom:20px;right:20px;z-index:9999;background:#333;color:#fff;padding:12px 20px;border-radius:8px;font-family:-apple-system,BlinkMacSystemFont,sans-serif;font-size:14px;box-shadow:0 4px 12px rgba(0,0,0,0.3);max-width:350px;opacity:0;transition:opacity 0.3s;pointer-events:none;';
@@ -372,6 +434,8 @@
     const targetUrl = urlOverride || currentUrl;
     console.log('[SS:yt] 🔄 restoreYouTubePosition called, url:', targetUrl);
 
+    // While a pre-scan reload is pending, isRestoring stays true, so any further
+    // trigger (there can be two per document) bails here instead of reloading again.
     if (isRestoring) {
       console.log('[SS:yt] Already restoring, skipping');
       return;
@@ -384,6 +448,10 @@
 
     isRestoring = true;
     cleanupYTScan();
+
+    // Consume the "we already reloaded for this" marker first, before any early
+    // return, so it cannot survive into a later navigation and skip a refresh.
+    const scanReloaded = consumeScanReload(targetUrl);
 
     const key = getYouTubeStorageKey(targetUrl);
     console.log('[SS:yt] Looking for storage key:', key);
@@ -405,12 +473,34 @@
 
         console.log('[SS:yt] ✅ Found videoId:', saved.videoId, 'type=' + (saved.type || 'video'), 'saved at:', new Date(saved.timestamp).toLocaleTimeString());
 
+        // Act once per page per document — otherwise a second trigger re-scrolls
+        // or re-scans the page we just restored.
+        const normalizedTarget = normalizeUrl(targetUrl);
+        if (restoredThisDocument.has(normalizedTarget)) {
+          console.log('[SS:yt] Already restored this page in this document, skipping');
+          finishRestore();
+          return;
+        }
+        restoredThisDocument.add(normalizedTarget);
+
         const videoLink = findVideoInDOM(saved.videoId, saved.type);
         if (videoLink) {
           console.log('[SS:yt] Video already in DOM, scrolling to it');
           scrollVideoIntoView(videoLink);
           finishRestore();
           return;
+        }
+
+        // The target is off-screen and must be scanned for. Do that on a freshly
+        // reloaded page: the marker records that this refresh already happened,
+        // so the restore that runs after the reload scans instead of reloading
+        // again.
+        if (!scanReloaded) {
+          if (reloadForScan(targetUrl)) {
+            // Deliberately do NOT finishRestore(): keeping isRestoring true blocks
+            // any second trigger until the reload unloads this document.
+            return;
+          }
         }
 
         console.log('[SS:yt] Starting progressive scan for video:', saved.videoId);
@@ -426,6 +516,11 @@
   // Save position immediately when a video is clicked on a YouTube channel page.
   // Uses capture phase so we run BEFORE YouTube's click handler SPA-navigates away.
   function handleVideoClick(event) {
+    if (!isEnabledForUrl) {
+      console.log('[SS:click] CLICK: ignored - extension not enabled for this channel');
+      return;
+    }
+
     if (!isYouTubeChannelPage()) {
       console.log('[SS:click] CLICK: ignored - not a YouTube channel page');
       return;
@@ -508,9 +603,11 @@
     saveYouTubePosition(videoId, mediaType, readCardDuration(link));
   }
 
-  // Manage click-to-save listener lifecycle: attach only when on a YouTube channel page.
+  // Manage click-to-save listener lifecycle: attach only when the current URL is
+  // an added (enabled) YouTube channel page. This keeps the listener off for
+  // channels the user never added, so a stray click cannot create a stored entry.
   function ensureClickListener() {
-    if (isYouTubeChannelPage()) {
+    if (isYouTubeChannelPage() && isEnabledForUrl) {
       if (!clickListenerAttached) {
         // pointerdown fires BEFORE YouTube's SPA navigation, so it reliably
         // captures fast clicks; click is kept for keyboard activation.
@@ -533,15 +630,32 @@
   function observeUrlChanges() {
     let lastUrl = window.location.href;
 
+    // A navigation starts a fresh restore cycle. Clearing here lets the new page
+    // be handled once even when it reuses a URL handled earlier in this document
+    // (for example returning to the same channel from one of its videos).
+    function handleUrlChange() {
+      restoredThisDocument.clear();
+      lastUrl = window.location.href;
+      currentUrl = lastUrl;
+      // Assume the new URL is not added until the re-check below says otherwise,
+      // so a click during the async round-trip cannot save an entry for a channel
+      // the user never added. refreshEnabledState re-enables it if it is added.
+      isEnabledForUrl = false;
+      ensureClickListener();
+      // Re-read the enabled state for the new URL before touching the listener or
+      // restoring: an SPA navigation can move between added and non-added
+      // channels, and the click-to-save listener must follow that state.
+      refreshEnabledState(function(isEnabled) {
+        if (isEnabled && isYouTubeChannelPage()) {
+          setTimeout(() => restoreYouTubePosition(), 2500);
+        }
+      });
+    }
+
     // Observe DOM mutations that might indicate route change
     const observer = new MutationObserver(() => {
       if (window.location.href !== lastUrl) {
-        lastUrl = window.location.href;
-        currentUrl = lastUrl;
-        ensureClickListener();
-        if (isYouTubeChannelPage()) {
-          setTimeout(() => restoreYouTubePosition(), 2500);
-        }
+        handleUrlChange();
       }
     });
 
@@ -558,12 +672,7 @@
       originalPushState.apply(this, args);
       setTimeout(() => {
         if (window.location.href !== lastUrl) {
-          lastUrl = window.location.href;
-          currentUrl = lastUrl;
-          ensureClickListener();
-          if (isYouTubeChannelPage()) {
-            setTimeout(() => restoreYouTubePosition(), 2500);
-          }
+          handleUrlChange();
         }
       }, 100);
     };
@@ -572,12 +681,7 @@
       originalReplaceState.apply(this, args);
       setTimeout(() => {
         if (window.location.href !== lastUrl) {
-          lastUrl = window.location.href;
-          currentUrl = lastUrl;
-          ensureClickListener();
-          if (isYouTubeChannelPage()) {
-            setTimeout(() => restoreYouTubePosition(), 2500);
-          }
+          handleUrlChange();
         }
       }, 100);
     };
@@ -586,12 +690,7 @@
     window.addEventListener('popstate', () => {
       setTimeout(() => {
         if (window.location.href !== lastUrl) {
-          lastUrl = window.location.href;
-          currentUrl = lastUrl;
-          ensureClickListener();
-          if (isYouTubeChannelPage()) {
-            setTimeout(() => restoreYouTubePosition(), 2500);
-          }
+          handleUrlChange();
         }
       }, 100);
     });
@@ -622,6 +721,46 @@
     }
   }
 
+  // React to the current channel being added/removed from the popup while this
+  // page stays open. Without this, clicking Add would not enable click-to-save
+  // until the next navigation or reload, so the first video click would be lost.
+  function watchEnabledSitesChanges() {
+    if (!chrome.storage || !chrome.storage.onChanged) return;
+    chrome.storage.onChanged.addListener(function(changes, areaName) {
+      if (areaName !== 'local' || !changes.enabled_sites) return;
+      if (!isExtensionValid()) return;
+      console.log('[SS:init] enabled_sites changed, re-evaluating for current URL');
+      refreshEnabledState();
+    });
+  }
+
+  // Read the enabled (added-channel) state for the current URL and apply it. Used
+  // on init and after every SPA navigation, so the click listener and restore
+  // always reflect the URL that is actually loaded.
+  function refreshEnabledState(callback) {
+    if (!isExtensionValid()) {
+      proceedWithInit(false);
+      if (callback) callback(false);
+      return;
+    }
+
+    chrome.runtime.sendMessage(
+      { action: 'get_extension_enabled', url: window.location.href },
+      function(response) {
+        if (chrome.runtime.lastError) {
+          console.error('[SS:init] Error checking extension enabled state:', chrome.runtime.lastError);
+          proceedWithInit(false);
+          if (callback) callback(false);
+          return;
+        }
+        const isEnabled = response && response.enabled === true;
+        console.log('[SS:init] Extension enabled state for this URL:', isEnabled);
+        proceedWithInit(isEnabled);
+        if (callback) callback(isEnabled);
+      }
+    );
+  }
+
   // Check if page is a YouTube channel page
   function isYouTubeChannelPage() {
     const hostname = window.location.hostname;
@@ -640,26 +779,23 @@
     // gets out of sync with the storage key used when the position was saved.
     observeUrlChanges();
 
+    // Keep the click-to-save listener in sync when the channel is added/removed
+    // from the popup while this page stays open.
+    watchEnabledSitesChanges();
+
     // First check if extension is enabled for this URL
-    chrome.runtime.sendMessage(
-      { action: 'get_extension_enabled', url: window.location.href },
-      function(response) {
-        if (chrome.runtime.lastError) {
-          console.error('[SS:init] Error checking extension enabled state:', chrome.runtime.lastError);
-          proceedWithInit(false);
-        } else {
-          const isEnabled = response.enabled === true;
-          console.log('[SS:init] Extension enabled state for this URL:', isEnabled);
-          proceedWithInit(isEnabled);
-        }
-      }
-    );
+    refreshEnabledState();
   }
 
   // Proceed with initialization based on extension enabled state
   function proceedWithInit(isExtensionEnabled) {
+    isEnabledForUrl = isExtensionEnabled;
+
     if (!isExtensionEnabled) {
       console.log('[SS:init] ❌ Extension disabled for this URL, skipping video-ID tracking');
+      // Remove a listener left over from a previously-enabled page so it cannot
+      // save an entry for a channel that is not added.
+      ensureClickListener();
       return;
     }
 
@@ -667,10 +803,14 @@
     if (isYouTubeChannelPage()) {
       console.log('[SS:init] ✅ YouTube channel page detected, starting video-ID tracking');
       setupYouTubeTracking();
+      // setupYouTubeTracking is a no-op after the first channel page in this
+      // document, so re-assert the listener for the newly-visited channel here.
+      ensureClickListener();
       return;
     }
 
     console.log('[SS:init] Not a YouTube channel page, skipping tracking');
+    ensureClickListener();
   }
 
   // Start the extension
@@ -684,6 +824,7 @@
   window.debugReadingPosition = {
     isYouTubeChannelPage,
     isTrackingActive: () => isTrackingActive,
+    isEnabled: () => isEnabledForUrl,
     isRestoring: () => isRestoring,
     currentUrl: () => currentUrl,
     getYouTubeStorageKey,
@@ -700,8 +841,10 @@
         if (result[ytKey]) { console.log('[SS:debug] YouTube Position:', result[ytKey]); }
       });
     },
-    forceRestore: () => restoreYouTubePosition(),
-    forceYouTubeRestore: restoreYouTubePosition,
+    // "Force" means ignore the once-per-navigation dedupe so a restore can be
+    // re-run on demand (used by the live validation scripts).
+    forceRestore: () => { restoredThisDocument.clear(); restoreYouTubePosition(); },
+    forceYouTubeRestore: () => { restoredThisDocument.clear(); restoreYouTubePosition(); },
   };
 
   console.log('[SS:init] 📖 Scroll Saver (YouTube) loaded. Debug: window.debugReadingPosition');

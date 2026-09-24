@@ -181,8 +181,8 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // Drop a thumbnail that fails to load (offline, request blocked). Inline onerror
   // attributes are blocked by the MV3 CSP, so wire it up after insert. The entry
-  // also loses its grid slot via .no-thumb, otherwise the classic layout would
-  // leave an empty column where the preview used to be.
+  // also gets .no-thumb so layout hooks (and the layout verifier) can tell the
+  // preview is gone; the anchor itself is hidden so it never leaves an empty slot.
   //
   // Note: a deleted/private video does NOT land here — i.ytimg.com answers 404 with
   // a small (120px) placeholder JPEG, which decodes fine and fires load, not error.
@@ -239,23 +239,6 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log('Popup: YouTube positions in storage:', Object.keys(ytPositions).length);
       }
     });
-  }
-
-  // Format date
-  function formatDate(timestamp) {
-    if (!timestamp) return 'Unknown time';
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffMs = now - date;
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-
-    if (diffMins < 1) return 'Just now';
-    if (diffMins < 60) return `${diffMins} minute${diffMins === 1 ? '' : 's'} ago`;
-    if (diffHours < 24) return `${diffHours} hour${diffHours === 1 ? '' : 's'} ago`;
-    if (diffDays < 7) return `${diffDays} day${diffDays === 1 ? '' : 's'} ago`;
-    return date.toLocaleDateString();
   }
 
   // Truncate text (keeps the beginning)
@@ -322,7 +305,6 @@ document.addEventListener('DOMContentLoaded', function() {
                     ${thumb}
                     <div class="entry-title">${displayTitle}</div>
                     <div class="entry-url">${truncatePrefix(currentTabUrl, 30)}</div>
-                    <div class="entry-meta">${formatDate(currentTabPosition.timestamp)}</div>
                   </div>
                 `;
                 clearCurrentBtn.disabled = false;
@@ -407,12 +389,13 @@ document.addEventListener('DOMContentLoaded', function() {
         ? `<a href="${getYouTubeContentLink(position)}" target="_blank" class="entry-link">${PLAY_ICON}${position.videoId}</a>`
         : truncate(position.title || 'Untitled', 40);
 
+      // Stored entries keep the video ID but drop the full link: the ID plus a
+      // clickable preview identify the entry, and the URL is still reachable via
+      // the goto action.
       const details = `
-            <div class="entry-title" title="${titleText}">${title}</div>
-            <div class="entry-url" title="${url}">${truncatePrefix(url, 48)}</div>
-            <div class="entry-meta">${formatDate(position.timestamp)}</div>`;
+            <div class="entry-title" title="${titleText}">${title}</div>`;
 
-      // Compact puts the details in a flex child so the icon actions sit beside
+      // Compact puts the details in a child so the icon actions sit beside
       // them; classic uses the original full-width text buttons underneath.
       const main = pageLayout === 'classic' ? details : `<div class="entry-main">${details}</div>`;
       const actions = pageLayout === 'classic'

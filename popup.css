@@ -347,12 +347,12 @@ body {
 
 /* ---- Entry (shared) ---- */
 
-/* In the Stored list each entry is a row: main info + icon actions. */
+/* Compact "vertical menu" stored entries are a row: a large preview, the video
+   ID beside it, and the action icons at the far right. */
 .entry {
   display: flex;
   align-items: flex-start;
-  justify-content: space-between;
-  gap: 8px;
+  gap: 10px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-2);
   transition: background 0.12s ease;
@@ -372,7 +372,7 @@ body {
 }
 
 .entry-title {
-  font-size: 13px;
+  font-size: 14px;
   font-weight: 600;
   color: var(--text);
   white-space: nowrap;
@@ -382,7 +382,7 @@ body {
 }
 
 .entry-url {
-  font-size: 11px;
+  font-size: 12px;
   color: var(--text-2);
   white-space: nowrap;
   overflow: hidden;
@@ -390,12 +390,6 @@ body {
      trailing ellipsis must not eat the suffix. Clip instead. */
   text-overflow: clip;
   margin-top: 1px;
-}
-
-.entry-meta {
-  font-size: 11px;
-  color: var(--text-3);
-  margin-top: 2px;
 }
 
 .entry-actions {
@@ -441,15 +435,15 @@ body {
 
 /* ---- Video previews ---- */
 
-/* Stored-list rows are flex, so the preview sits beside the details at 72x40.
-   The Current panel stacks its entry, so there the preview spans the width. */
+/* Stored-list previews sit at a large, readable size beside the video ID; the
+   Current panel overrides this to span the width. */
 .entry-thumb {
   position: relative;
   display: block;
   flex-shrink: 0;
-  width: 72px;
-  height: 40px;
-  border-radius: 4px;
+  width: 168px;
+  height: 94px;
+  border-radius: 6px;
   overflow: hidden;
   background: var(--surface-2);
 }
@@ -476,9 +470,9 @@ body {
   border-radius: 3px;
   background: rgba(0, 0, 0, 0.78);
   color: #fff;
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 600;
-  line-height: 15px;
+  line-height: 16px;
   letter-spacing: 0.02em;
 }
 
