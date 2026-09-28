@@ -178,6 +178,7 @@ body.theme-dark {
 /* ---- Entry (position item) ---- */
 
 .entry {
+  position: relative;
   padding: 14px 0;
   border-bottom: 1px solid var(--color-border-light);
 }
@@ -438,6 +439,73 @@ body.theme-dark {
   font-weight: 600;
   line-height: 16px;
   letter-spacing: 0.02em;
+}
+
+/* ---- Floating delete ---- */
+
+.entry-media {
+  position: relative;
+  width: 100%;
+  margin-bottom: 10px;
+  border-radius: 4px;
+}
+
+.entry-media .entry-thumb {
+  margin-bottom: 0;
+}
+
+/* A small icon on the preview's top-right; hovering it scales it up slightly
+   as a pressability cue. */
+.entry-delete {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.entry-delete:hover,
+.entry-delete:focus-visible {
+  transform: scale(1.15);
+  background: rgba(0, 0, 0, 0.78);
+}
+
+.entry-delete:active {
+  transform: scale(0.98);
+}
+
+/* Entries without a preview (e.g. channel scroll positions) keep a compact
+   trash icon pinned to the entry's top-right. */
+.entry-delete-bare {
+  top: 2px;
+  right: 0;
+  width: 24px;
+  height: 24px;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--color-text-tertiary);
+}
+
+.entry-delete-bare:hover,
+.entry-delete-bare:focus-visible {
+  transform: scale(1.15);
+  background: transparent;
+  color: var(--color-danger);
+}
+
+.entry.no-thumb .entry-main {
+  padding-right: 30px;
 }
 
 #theme-toggle {

@@ -39,7 +39,6 @@ document.addEventListener('DOMContentLoaded', function() {
   try {
     // DOM Elements
   const currentInfoEl = document.getElementById('current-info');
-  const clearCurrentBtn = document.getElementById('clear-current');
   const refreshBtn = document.getElementById('refresh');
   const positionsListEl = document.getElementById('positions-list');
   const clearAllBtn = document.getElementById('clear-all');
@@ -102,8 +101,19 @@ document.addEventListener('DOMContentLoaded', function() {
     }
   });
 
-  // YouTube play icon (inline SVG)
-  const PLAY_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="vertical-align:-2px;margin-right:3px;" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>';
+  // Trash icon (inline SVG) for the floating delete control.
+  const TRASH_ICON = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
+
+  // The delete control floats on the preview's top-right corner. Hovering it
+  // gives a small scale-up cue. Entries without a preview fall back to a bare
+  // icon pinned to the entry (see .entry-delete-bare).
+  function deleteButtonHtml(url, options) {
+    const opts = options || {};
+    const classes = 'entry-delete' + (opts.bare ? ' entry-delete-bare' : '');
+    return `<button type="button" class="${classes}" data-url="${url}"`
+      + ' title="Delete saved position" aria-label="Delete saved position">'
+      + TRASH_ICON + '</button>';
+  }
 
   // Build the correct YouTube link for a saved content entry. Shorts live under
   // /shorts/<id> while regular videos use /watch?v=<id>. Entries saved before the
@@ -194,10 +204,35 @@ document.addEventListener('DOMContentLoaded', function() {
         if (thumb) thumb.style.display = 'none';
         const entry = img.closest('.entry');
         if (entry) entry.classList.add('no-thumb');
+        // The overlay delete lived inside the preview; move it out so the entry
+        // still has a delete control once the preview is gone.
+        const media = img.closest('.entry-media');
+        if (media && entry) {
+          const btn = media.querySelector('.entry-delete');
+          if (btn && !btn.classList.contains('entry-delete-bare')) {
+            btn.classList.add('entry-delete-bare');
+            entry.appendChild(btn);
+          }
+          media.style.display = 'none';
+        }
       };
       img.addEventListener('error', hide);
       // A cached failure can complete before this listener is attached.
       if (img.complete && img.naturalWidth === 0) hide();
+    });
+  }
+
+  // Wire the floating delete controls rendered inside a container. Uses event
+  // listeners (not inline handlers) because the MV3 CSP blocks inline JS.
+  function wireDeleteButtons(root) {
+    if (!root) return;
+    root.querySelectorAll('.entry-delete').forEach(function(btn) {
+      if (btn.dataset.wired) return;
+      btn.dataset.wired = '1';
+      btn.addEventListener('click', function() {
+        const url = btn.getAttribute('data-url');
+        if (url) clearPosition(url);
+      });
     });
   }
 
@@ -295,37 +330,43 @@ document.addEventListener('DOMContentLoaded', function() {
 
               let html = '';
               if (currentTabPosition) {
-                const isYT = currentTabPosition.videoId && !currentTabPosition.scrollY;
-                const displayTitle = isYT
-                  ? `<a href="${getYouTubeContentLink(currentTabPosition)}" target="_blank" class="entry-link">${PLAY_ICON}${currentTabPosition.videoId}</a>`
-                  : truncate(tab.title || 'Untitled', 40);
                 const thumb = thumbnailHtml(currentTabPosition);
+                // The preview is the entry point, so the video ID link is
+                // redundant; show the page/video title and float delete on the
+                // preview instead.
+                const media = thumb
+                  ? `<div class="entry-media">${thumb}${deleteButtonHtml(currentTabUrl)}</div>`
+                  : '';
                 html = `
                   <div class="entry${thumb ? '' : ' no-thumb'}">
-                    ${thumb}
-                    <div class="entry-title">${displayTitle}</div>
-                    <div class="entry-url">${truncatePrefix(currentTabUrl, 30)}</div>
+                    ${media}
+                    <div class="entry-main">
+                      <div class="entry-title">${truncate(tab.title || 'Untitled', 40)}</div>
+                      <div class="entry-url">${truncatePrefix(currentTabUrl, 30)}</div>
+                    </div>
+                    ${thumb ? '' : deleteButtonHtml(currentTabUrl, { bare: true })}
                   </div>
                 `;
-                clearCurrentBtn.disabled = false;
                 console.log('Popup: Showing saved position for current tab');
               } else {
                 html = `
                   <div class="entry no-thumb">
-                    <div class="entry-title">${truncate(tab.title || 'Untitled', 50)}</div>
-                    <div class="entry-url">${truncatePrefix(currentTabUrl, 30)}</div>
-                    ${isTracking
-                      ? '<p class="entry-status">Tracking &mdash; start scrolling to save a position</p>'
-                      : '<p class="entry-note">No saved position for this page</p>'
-                    }
+                    <div class="entry-main">
+                      <div class="entry-title">${truncate(tab.title || 'Untitled', 50)}</div>
+                      <div class="entry-url">${truncatePrefix(currentTabUrl, 30)}</div>
+                      ${isTracking
+                        ? '<p class="entry-status">Tracking &mdash; start scrolling to save a position</p>'
+                        : '<p class="entry-note">No saved position for this page</p>'
+                      }
+                    </div>
                   </div>
                 `;
-                clearCurrentBtn.disabled = true;
                 console.log('Popup: No saved position for current tab');
               }
 
               currentInfoEl.innerHTML = html;
               wireThumbnailFallbacks(currentInfoEl);
+              wireDeleteButtons(currentInfoEl);
             }
           );
         }
@@ -384,63 +425,39 @@ document.addEventListener('DOMContentLoaded', function() {
     let html = '';
     positions.forEach(([url, position]) => {
       const isYT = position.videoId && !position.scrollY;
-      const titleText = isYT ? position.videoId : (position.title || 'Untitled');
-      const title = isYT
-        ? `<a href="${getYouTubeContentLink(position)}" target="_blank" class="entry-link">${PLAY_ICON}${position.videoId}</a>`
-        : truncate(position.title || 'Untitled', 40);
-
-      // Stored entries keep the video ID but drop the full link: the ID plus a
-      // clickable preview identify the entry, and the URL is still reachable via
-      // the goto action.
-      const details = `
-            <div class="entry-title" title="${titleText}">${title}</div>`;
-
-      // Compact puts the details in a child so the icon actions sit beside
-      // them; classic uses the original full-width text buttons underneath.
-      const main = pageLayout === 'classic' ? details : `<div class="entry-main">${details}</div>`;
-      const actions = pageLayout === 'classic'
-        ? `<button class="btn goto" data-url="${url}">Go to Page</button>
-            <button class="btn btn-danger clear-one" data-url="${url}">Delete</button>`
-        : `<button class="icon-btn goto" data-url="${url}" title="Go to page">\u2197</button>
-            <button class="icon-btn danger clear-one" data-url="${url}" title="Delete">\u2715</button>`;
-
       const thumb = thumbnailHtml(position);
+
+      // Video entries are identified by their preview alone: clicking it opens
+      // the video, so the video ID and a separate go-to link are redundant.
+      // Non-video entries keep a title, which links to the saved page because
+      // they have no preview to click.
+      let main = '';
+      if (!isYT) {
+        const titleText = position.title || 'Untitled';
+        main = `<div class="entry-main">
+            <div class="entry-title" title="${titleText}">
+              <a class="entry-link" href="${url}" target="_blank" rel="noopener">${truncate(titleText, 40)}</a>
+            </div>
+          </div>`;
+      }
+
+      // Delete floats on the preview's top-right; entries without a preview get
+      // a bare icon pinned to the entry.
+      const media = thumb
+        ? `<div class="entry-media">${thumb}${deleteButtonHtml(url)}</div>`
+        : '';
+      const bare = thumb ? '' : deleteButtonHtml(url, { bare: true });
+
       html += `
         <div class="entry${thumb ? '' : ' no-thumb'}" data-url="${url}">
-          ${thumb}${main}
-          <div class="entry-actions">${actions}
-          </div>
+          ${media}${main}${bare}
         </div>
       `;
     });
 
     positionsListEl.innerHTML = html;
     wireThumbnailFallbacks(positionsListEl);
-
-    // Add event listeners to the new buttons
-    document.querySelectorAll('.clear-one').forEach(btn => {
-      btn.addEventListener('click', function() {
-        const url = this.getAttribute('data-url');
-        clearPosition(url);
-      });
-    });
-
-    document.querySelectorAll('.goto').forEach(btn => {
-      btn.addEventListener('click', function(e) {
-        e.preventDefault();
-        const url = this.getAttribute('data-url');
-        if (!url) {
-          console.error('Popup: No URL found on goto button');
-          return;
-        }
-        chrome.tabs.create({ url }, (tab) => {
-          if (chrome.runtime.lastError) {
-            console.error('Popup: chrome.tabs.create failed:', chrome.runtime.lastError.message, 'falling back to window.open');
-            window.open(url, '_blank');
-          }
-        });
-      });
-    });
+    wireDeleteButtons(positionsListEl);
   }
 
   // Update stats
@@ -449,30 +466,6 @@ document.addEventListener('DOMContentLoaded', function() {
     statsCountEl.textContent = count;
     console.log('Popup: Stats updated, count:', count);
   }
-
-  // Clear position for current tab
-  clearCurrentBtn.addEventListener('click', function() {
-    if (!currentTabUrl || !currentTabPosition) return;
-
-    if (!confirm(`Delete the saved position for this page?\n\n${truncatePrefix(currentTabUrl, 50)}`)) return;
-
-    chrome.runtime.sendMessage(
-      { action: 'clear_position', url: currentTabUrl },
-      function(response) {
-        if (chrome.runtime.lastError) {
-          console.error('Error:', chrome.runtime.lastError);
-          return;
-        }
-
-        if (response.success) {
-          // Update UI
-          currentTabPosition = null;
-          updateCurrentPageInfo();
-          loadAllPositions(); // Reload all positions
-        }
-      }
-    );
-  });
 
   // Clear all positions
   clearAllBtn.addEventListener('click', function() {

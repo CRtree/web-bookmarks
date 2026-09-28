@@ -4,7 +4,7 @@
 
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-Available-brightgreen?logo=googlechrome&logoColor=white)](https://chrome.google.com/webstore)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-2.0.1-orange.svg)](#)
+[![Version](https://img.shields.io/badge/Version-2.0.3-orange.svg)](#)
 
 
 ## ✨ What is Scroll Saver?
@@ -67,13 +67,20 @@ Every saved entry shows a thumbnail and, when it could be scraped at save time, 
 badge. There is no toggle — previews are always on. See
 [Privacy](#-privacy--security) for the network implication.
 
-Every saved entry leads with a full-width preview; the text stacks beneath it:
+Saved entries lead with a preview — two per row in the Vertical Menu stored list, full width
+elsewhere:
 
 | Layout | Preview | Size |
 |---|---|---|
 | Extended, both panels | full width, above the text | 16:9 (≈316×178) |
 | Vertical Menu, Current panel | full width | 16:9 |
-| Vertical Menu, Stored list | beside the video ID | 168×94 |
+| Vertical Menu, Stored list | two per row, preview-only cards | 16:9 (≈190×107 each) |
+
+The preview is the entry point: clicking it opens the video, so video entries no longer show
+their ID or a separate go-to link. Delete floats on the preview's top-right as a trash icon
+that scales up slightly on hover/focus as a pressability cue. Entries without a preview —
+channel scroll positions — keep a linked title and a compact trash icon pinned to the entry's
+top-right.
 
 Because the Extended popup now carries full-width previews it grows past Chrome's 600px cap and
 scrolls as a single column; the stored list no longer keeps its own scrollbar. When a thumbnail
@@ -328,6 +335,18 @@ Two gotchas worth knowing if you extend them:
 `npm run screenshots` renders every layout × theme to `/tmp/ss-layouts` for visual review.
 
 ## 📝 Changelog
+
+### v2.0.3 (2026)
+- **Preview-first entries** — the preview is now the only thing identifying a saved video.
+  Clicking it opens the video, so the video ID and the separate go-to button are gone from both
+  layouts; titles stay (and link to the saved page) for non-video entries that have no preview.
+- **Two previews per row** — the Vertical Menu stored list lays its video cards out in a
+  two-column grid, roughly halving the scrolling for a list of saved videos; entries without a
+  preview span the full width so their titles still fit.
+- **Floating delete** — delete is now a trash icon on the preview's top-right, with a subtle
+  scale-up on hover as a pressability cue. It's obvious without cluttering the row, and the
+  destructive action is still a single click with a confirm. Entries without a preview get a
+  compact trash icon pinned to their top-right instead.
 
 ### v2.0.2 (2026)
 - **No stray saved videos** — click-to-save now runs only for channels you've actually added.

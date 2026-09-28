@@ -339,27 +339,67 @@ body {
 
 /* ---- Stored list ---- */
 
+/* Two previews per row: the stored panel is wide enough for a pair of 16:9
+   cards, which halves the scrolling for a list of videos. */
 .stored-list {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-content: start;
+  gap: 8px;
+  padding: 10px;
+}
+
+.stored-list .empty-state {
+  grid-column: 1 / -1;
 }
 
 /* ---- Entry (shared) ---- */
 
-/* Compact "vertical menu" stored entries are a row: a large preview, the video
-   ID beside it, and the action icons at the far right. */
+/* Compact "vertical menu" stored entries are cards managed below; this base
+   rule also covers the Current panel and classic-style rows. */
 .entry {
+  position: relative;
   display: flex;
   align-items: flex-start;
   gap: 10px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--border-2);
-  transition: background 0.12s ease;
+  transition: background 0.12s ease, border-color 0.12s ease;
 }
 
 .panel.stored .entry:hover {
   background: var(--surface-2);
+  border-color: var(--text-3);
+}
+
+/* Stored entries are cards. Video entries show just their preview (two per row);
+   a non-video entry has no preview, so it spans the full width to make room for
+   its title. */
+.panel.stored .entry {
+  padding: 0;
+  border: 1px solid var(--border-2);
+  border-radius: 6px;
+  overflow: hidden;
+  background: var(--surface);
+}
+
+.panel.stored .entry.no-thumb {
+  grid-column: 1 / -1;
+  padding: 10px 12px;
+}
+
+/* Let the preview fill its card so two fit per row. */
+.panel.stored .entry-media {
+  width: 100%;
+}
+
+.panel.stored .entry-thumb {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
 }
 
 .entry:last-child {
@@ -474,6 +514,69 @@ body {
   font-weight: 600;
   line-height: 16px;
   letter-spacing: 0.02em;
+}
+
+/* ---- Floating delete ---- */
+
+/* Wraps the preview so the delete control can be anchored to its corner. */
+.entry-media {
+  position: relative;
+  flex-shrink: 0;
+  border-radius: 6px;
+}
+
+/* Resting state: a small icon button on the preview's top-right. Hovering or
+   focusing it scales it up slightly as a pressability cue. */
+.entry-delete {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: none;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: pointer;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.entry-delete:hover,
+.entry-delete:focus-visible {
+  transform: scale(1.15);
+  background: rgba(0, 0, 0, 0.78);
+}
+
+.entry-delete:active {
+  transform: scale(0.98);
+}
+
+/* Entries without a preview (e.g. channel scroll positions) keep a compact
+   trash icon pinned to the entry's top-right. */
+.entry-delete-bare {
+  top: 3px;
+  right: 12px;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-3);
+}
+
+.entry-delete-bare:hover,
+.entry-delete-bare:focus-visible {
+  transform: scale(1.15);
+  background: transparent;
+  color: var(--danger);
+}
+
+.entry.no-thumb .entry-main {
+  padding-right: 30px;
 }
 
 /* ---- Scrollbar ---- */
