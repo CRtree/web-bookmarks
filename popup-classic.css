@@ -1,8 +1,8 @@
 /* ================================================================
    Youtube Scroll Saver — Editorial Typesetting Theme
-   ("Classic" layout, restored from v1.1.x)
+   ("Stack" layout, restored from v1.1.x)
 
-   Loaded only by popup-classic.html. The compact layout lives in popup.css.
+   Loaded only by popup-classic.html. The Compact layout lives in popup.css.
    Users switch between the two via the toggle in the popup.
    ================================================================ */
 
@@ -66,20 +66,41 @@ body.theme-dark {
 }
 
 .container {
-  padding: 16px 16px 16px;
+  padding: 16px 16px 52px;
 }
 
 /* ---- Toolbar ----
-   Utility controls sit just under the tagline (not pinned to the top), so the
-   masthead keeps its editorial hierarchy and the controls stay near the action. */
+   A fixed "floor" pinned to the bottom of the popup. Keeping the utility
+   controls out of the scroll flow means a long Stored list never buries the
+   Export / Layout / Theme buttons. The container carries matching bottom
+   padding so the last entry is never hidden behind the bar. */
 
 .toolbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
   display: flex;
   justify-content: center;
   flex-wrap: wrap;
-  gap: 8px;
-  margin-bottom: 12px;
+  gap: 6px;
+  padding: 5px 12px;
+  background: var(--color-bg);
+  border-top: 1px solid var(--color-border);
+  box-shadow: 0 -4px 12px rgba(45, 36, 22, 0.06);
   animation: fadeUp 0.5s 0.2s cubic-bezier(0.22, 0.61, 0.36, 1) both;
+}
+
+/* The floor is secondary chrome, so its buttons run smaller than the card
+   actions: tighter padding and a 11px label keep the bar to a slim strip. */
+.toolbar .btn-utility {
+  font-size: 11px;
+  padding: 3px 8px;
+}
+
+body.theme-dark .toolbar {
+  box-shadow: 0 -4px 12px rgba(0, 0, 0, 0.35);
 }
 
 /* ---- Masthead ---- */
@@ -522,8 +543,10 @@ body.theme-dark {
   padding-right: 30px;
 }
 
-#theme-toggle {
-  font-size: 12px;
+/* Scoped to the toolbar's compact size; the ID selector would otherwise
+   out-specify `.toolbar .btn-utility`. */
+.toolbar #theme-toggle {
+  font-size: 11px;
 }
 
 /* ---- Scrollbar ---- */

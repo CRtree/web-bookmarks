@@ -6,10 +6,14 @@ const { chromium } = require(path.join(__dirname, '..', '..', 'node_modules', 'p
 //
 // Why this is not just "screenshot the popup":
 //   - There are two layouts and both are worth showing. The classic popup is
-//     portrait (360x689); store screenshots must be 640x400 / 1280x800, so it is
-//     rendered at native size and composited onto a themed frame rather than
-//     stretched. The compact popup is natively 640x400, so it is captured
-//     full-bleed. Which one is the default is decided in manifest.json, not here.
+//     portrait (360x400 here; Chrome caps a popup at 600px tall and scrolls past
+//     that), and store screenshots must be 640x400 / 1280x800, so it is rendered
+//     at native size and composited onto a themed frame rather than stretched.
+//     It renders at the full 400px frame height rather than taller: the Stack
+//     layout's utility bar is `position: fixed` to the bottom of the viewport, so
+//     a taller viewport would push it below the crop and out of the asset.
+//     The compact popup is natively 640x400, so it is captured full-bleed.
+//     Which one is the default is decided in manifest.json, not here.
 //   - The mock must report the layout the page declares, otherwise popup.js
 //     performs its (correct) redirect and you silently capture the wrong page.
 //
@@ -23,7 +27,8 @@ const OUT_DIR = process.argv[2] || path.join(__dirname, 'out');
 
 const LAYOUTS = [
   // Portrait, so it needs compositing: render natively, then place on a themed canvas.
-  { key: 'classic', file: 'popup-classic.html', width: 360, height: 689, frame: true },
+  // Height matches the frame so the fixed bottom toolbar stays inside the crop.
+  { key: 'classic', file: 'popup-classic.html', width: 360, height: 400, frame: true },
   // Compact is already exactly one store screenshot, so capture it directly.
   { key: 'modern', file: 'popup.html', width: 640, height: 400, frame: false },
 ];

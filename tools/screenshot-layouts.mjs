@@ -15,9 +15,12 @@ import { createServer } from 'node:http';
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const outDir = process.argv[2] || join(tmpdir(), 'ss-layouts');
 
+// Render each popup at its real width. popup-classic.html is 360px wide
+// (body{width:360px}); rendering it wider would misplace anything sized to the
+// viewport, such as the Stack layout's fixed bottom toolbar.
 const PAGES = [
   { layout: 'modern', file: 'popup.html', width: 640 },
-  { layout: 'classic', file: 'popup-classic.html', width: 600 },
+  { layout: 'classic', file: 'popup-classic.html', width: 360 },
 ];
 
 // Real ids from the test channel so the thumbnails actually resolve.

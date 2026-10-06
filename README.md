@@ -4,7 +4,7 @@
 
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-Available-brightgreen?logo=googlechrome&logoColor=white)](https://chrome.google.com/webstore)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-2.1.0-orange.svg)](#)
+[![Version](https://img.shields.io/badge/Version-2.1.1-orange.svg)](#)
 
 
 ## ✨ What is Scroll Saver?
@@ -45,19 +45,19 @@ A focused alternative to generic "scroll position saver" tools: it does one thin
 
 The popup ships in two layouts and remembers your choice.
 
-| | Vertical Menu (default) | Extended |
+| | Compact (default) | Stack |
 |---|---|---|
 | Look | Two columns, system sans-serif | Editorial single column, system serif |
 | Size | 640×400 | 360×scrolls (full-width previews exceed Chrome's 600px cap) |
-| Toggle | ☰ in the top bar | "Vertical Menu" in the toolbar under the tagline |
+| Toggle | ☰ in the top bar | "Compact" in the fixed bottom bar |
 
-`manifest.json` points `default_popup` at `popup.html`, so a fresh install opens the vertical
-menu layout with no redirect. The choice is saved in `chrome.storage.local` (`layout`) and
+`manifest.json` points `default_popup` at `popup.html`, so a fresh install opens the compact
+layout with no redirect. The choice is saved in `chrome.storage.local` (`layout`) and
 applied via `chrome.action.setPopup`, so it persists across restarts. Both layouts share
 `popup.js` and differ only in markup and stylesheet:
 
-- `popup.html` + `popup.css` — Vertical Menu, two-column (default)
-- `popup-classic.html` + `popup-classic.css` — Extended, editorial single column
+- `popup.html` + `popup.css` — Compact, two-column (default)
+- `popup-classic.html` + `popup-classic.css` — Stack, editorial single column
 
 Changing the default means updating **both** `default_popup` in `manifest.json` and
 `DEFAULT_LAYOUT` in `popup.js`; existing users keep whatever they have chosen.
@@ -68,14 +68,14 @@ Every saved entry shows a thumbnail and, when it could be scraped at save time, 
 badge. There is no toggle — previews are always on. See
 [Privacy](#-privacy--security) for the network implication.
 
-Saved entries lead with a preview — two per row in the Vertical Menu stored list, full width
+Saved entries lead with a preview — two per row in the Compact stored list, full width
 elsewhere:
 
 | Layout | Preview | Size |
 |---|---|---|
-| Extended, both panels | full width, above the text | 16:9 (≈316×178) |
-| Vertical Menu, Current panel | full width | 16:9 |
-| Vertical Menu, Stored list | two per row, preview-only cards | 16:9 (≈190×107 each) |
+| Stack, both panels | full width, above the text | 16:9 (≈316×178) |
+| Compact, Current panel | full width | 16:9 |
+| Compact, Stored list | two per row, preview-only cards | 16:9 (≈190×107 each) |
 
 The preview is the entry point: clicking it opens the video, so video entries no longer show
 their ID or a separate go-to link. Delete floats on the preview's top-right as a trash icon
@@ -83,7 +83,7 @@ that scales up slightly on hover/focus as a pressability cue. Entries without a 
 channel scroll positions — keep a linked title and a compact trash icon pinned to the entry's
 top-right.
 
-Because the Extended popup now carries full-width previews it grows past Chrome's 600px cap and
+Because the Stack popup now carries full-width previews it grows past Chrome's 600px cap and
 scrolls as a single column; the stored list no longer keeps its own scrollbar. When a thumbnail
 is unavailable the entry gets `.no-thumb` and simply renders without it.
 
@@ -181,8 +181,8 @@ scroll-saver/
 ├── background.js          # Service worker - storage management
 ├── popup.html            # Popup HTML — compact layout
 ├── popup.css             # Popup styles — compact layout
-├── popup-classic.html    # Popup HTML — classic (pre-2.0) layout
-├── popup-classic.css     # Popup styles — classic layout
+├── popup-classic.html    # Popup HTML — Stack (pre-2.0) layout
+├── popup-classic.css     # Popup styles — Stack layout
 ├── popup.js              # Popup functionality (shared by both layouts)
 ├── import.html           # Import page - its own window (the popup can't survive the file picker)
 ├── import.js             # Import page logic
@@ -372,6 +372,18 @@ Two gotchas worth knowing if you extend them:
 `npm run screenshots` renders every layout × theme to `/tmp/ss-layouts` for visual review.
 
 ## 📝 Changelog
+
+### v2.1.1 (2026)
+- **Layout names** — the two-column layout is **Compact** again and the editorial single-column
+  layout is **Stack**. The names now describe the geometry and are parallel, replacing "Vertical
+  Menu" (which named the *two-column* layout) and "Extended" (which named the *single-column*
+  one). Toggles name their destination: the Stack popup's button reads `Compact`, and the Compact
+  popup's `☰` reads "Switch to the stack layout". The stored `layout` values (`modern` /
+  `classic`) and the filenames are unchanged.
+- **Stack toolbar is a fixed floor** — the `Export Log` / `Compact` / theme controls in the Stack
+  layout are pinned to the bottom of the popup instead of sitting under the tagline, so a long
+  Stored list never buries them behind a scroll. The bar is slimmer than the card actions and the
+  container reserves matching bottom padding so no entry hides behind it.
 
 ### v2.1.0 (2026)
 - **Export / import the saved list** — the Stored panel gains **Export** (writes every saved position to a

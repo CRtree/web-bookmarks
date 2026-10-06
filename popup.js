@@ -47,8 +47,10 @@ document.addEventListener('DOMContentLoaded', function() {
 
   // ---- Layout ----
   // Two complete popup pages share this script:
-  //   popup.html         "modern"  — compact two-column (popup.css)
-  //   popup-classic.html "classic" — editorial single-column (popup-classic.css)
+  //   popup.html         "modern"  — Compact layout, two-column (popup.css)
+  //   popup-classic.html "classic" — Stack layout, editorial single-column (popup-classic.css)
+  // The storage keys and data-layout values keep the old "modern"/"classic"
+  // names; only the user-facing labels use Compact / Stack.
   // manifest.json points default_popup at the modern page, so a fresh install
   // opens it with no redirect. Switching calls chrome.action.setPopup so the
   // choice survives restarts, stores the preference, and navigates so it takes

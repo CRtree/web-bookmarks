@@ -139,8 +139,8 @@ try {
       entryDisplay: getComputedStyle(entry).display,
     };
   });
-  // Vertical Menu stored entries are a flex row (preview, ID, actions) and stay
-  // flex when a preview is dropped; Extended stacks full-width previews and is
+  // Compact stored entries are a flex row (preview, ID, actions) and stay
+  // flex when a preview is dropped; Stack stacks full-width previews and is
   // block. Either way a missing preview never leaves an empty slot.
   const expectedDisplay = expectedDefault === 'classic' ? 'block' : 'flex';
   check(fallback?.thumbHidden, 'a failed thumbnail is hidden', JSON.stringify(fallback));
