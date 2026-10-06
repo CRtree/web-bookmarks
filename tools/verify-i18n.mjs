@@ -115,7 +115,7 @@ const profile = await mkdtemp(join(tmpdir(), 'ss-profile-'));
 let ctx;
 
 try {
-  for (const f of ['manifest.json', 'background.js', 'content.js', 'popup.html', 'popup.css', 'popup.js', 'LICENSE']) {
+  for (const f of ['manifest.json', 'background.js', 'content.js', 'popup.html', 'popup.css', 'popup.js', 'import.html', 'import.js', 'LICENSE']) {
     await cp(join(root, f), join(ext, f));
   }
   for (const d of ['icons', '_locales']) await cp(join(root, d), join(ext, d), { recursive: true });

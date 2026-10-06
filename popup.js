@@ -522,10 +522,10 @@ document.addEventListener('DOMContentLoaded', function() {
     });
   }
 
-  // Clear a specific position
+  // Clear a specific position. One click, no confirm: removing a single entry is
+  // cheap to redo (re-add the channel), and the extra dialog slowed the common
+  // case. "Delete all" keeps its confirm because it is bulk and hard to undo.
   function clearPosition(url) {
-    if (!confirm(`Delete this saved position?\n\n${truncatePrefix(url, 50)}`)) return;
-
     chrome.runtime.sendMessage(
       { action: 'clear_position', url: url },
       function(response) {
@@ -584,6 +584,89 @@ document.addEventListener('DOMContentLoaded', function() {
       });
     });
   }
+
+  // ---- Saved-position export / import ----
+  // Archive the stored list to a JSON file, or read one back. Export reuses the
+  // same get_positions payload the list renders. Import is re-validated in the
+  // background, which also enables the imported channels so restores work.
+  const EXPORT_KIND = 'youtube-scroll-saver-positions';
+  const EXPORT_VERSION = 1;
+
+  function buildPositionsExport(positions) {
+    return {
+      kind: EXPORT_KIND,
+      version: EXPORT_VERSION,
+      exportedAt: new Date().toISOString(),
+      count: Object.keys(positions).length,
+      positions: positions
+    };
+  }
+
+  function downloadJson(filename, text) {
+    const blob = new Blob([text], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  function exportPositions() {
+    chrome.runtime.sendMessage({ action: 'get_positions' }, function(response) {
+      if (chrome.runtime.lastError) {
+        alert('Export failed: ' + chrome.runtime.lastError.message);
+        return;
+      }
+      const positions = (response && response.positions) || {};
+      const count = Object.keys(positions).length;
+      if (count === 0) {
+        alert('There are no saved positions to export.');
+        return;
+      }
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+      downloadJson('scroll-saver-positions-' + stamp + '.json',
+        JSON.stringify(buildPositionsExport(positions), null, 2));
+      console.log('Popup: exported', count, 'positions');
+    });
+  }
+
+  // Import runs in its own window. Opening the OS file picker from this popup
+  // dismisses the popup, which tears down the message port while the read/import
+  // round-trip is still in flight. The import page does it from a window that
+  // stays open, so the background can always answer.
+  function openImportWindow() {
+    const url = chrome.runtime.getURL('import.html');
+    const width = 560;
+    const height = 500;
+
+    // chrome.windows.create places new windows at the top-left of the display by
+    // default; center it on the screen the popup is on instead. availLeft/availTop
+    // are Chrome-only but guard for engines that omit them.
+    const scr = window.screen || {};
+    const availLeft = typeof scr.availLeft === 'number' ? scr.availLeft : 0;
+    const availTop = typeof scr.availTop === 'number' ? scr.availTop : 0;
+    const availWidth = scr.availWidth || scr.width || 1280;
+    const availHeight = scr.availHeight || scr.height || 800;
+    const left = Math.round(availLeft + Math.max(0, (availWidth - width) / 2));
+    const top = Math.round(availTop + Math.max(0, (availHeight - height) / 2));
+
+    if (chrome.windows && chrome.windows.create) {
+      chrome.windows.create({ url: url, type: 'popup', width: width, height: height, left: left, top: top });
+    } else if (chrome.tabs && chrome.tabs.create) {
+      chrome.tabs.create({ url: url });
+    } else {
+      window.open(url, '_blank');
+    }
+    window.close();
+  }
+
+  const exportPositionsBtn = document.getElementById('export-positions');
+  if (exportPositionsBtn) exportPositionsBtn.addEventListener('click', exportPositions);
+  const importPositionsBtn = document.getElementById('import-positions');
+  if (importPositionsBtn) importPositionsBtn.addEventListener('click', openImportWindow);
 
   // Theme toggle button
   if (themeToggleBtn) {

@@ -4,7 +4,7 @@
 
 [![Chrome Web Store](https://img.shields.io/badge/Chrome%20Web%20Store-Available-brightgreen?logo=googlechrome&logoColor=white)](https://chrome.google.com/webstore)
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/Version-2.0.3-orange.svg)](#)
+[![Version](https://img.shields.io/badge/Version-2.1.0-orange.svg)](#)
 
 
 ## ✨ What is Scroll Saver?
@@ -38,6 +38,7 @@ A focused alternative to generic "scroll position saver" tools: it does one thin
 3. **Click a video** - Your spot on that channel is saved
 4. **Come back later** - Revisit the channel and you'll be scrolled back to the video you clicked
 5. **Check the popup** - Click the extension icon to see saved channels and manage settings
+6. **Back up your list** - In the Stored panel, **Export** writes every saved position to a JSON file and **Import** opens a small window to read one back (positions with the same URL are updated, and their channels are enabled)
 
 
 ## 🎨 Popup layouts and previews
@@ -48,7 +49,7 @@ The popup ships in two layouts and remembers your choice.
 |---|---|---|
 | Look | Two columns, system sans-serif | Editorial single column, system serif |
 | Size | 640×400 | 360×scrolls (full-width previews exceed Chrome's 600px cap) |
-| Toggle | ☰ in the top bar | "Vertical Menu" in the footer |
+| Toggle | ☰ in the top bar | "Vertical Menu" in the toolbar under the tagline |
 
 `manifest.json` points `default_popup` at `popup.html`, so a fresh install opens the vertical
 menu layout with no redirect. The choice is saved in `chrome.storage.local` (`layout`) and
@@ -97,6 +98,38 @@ Preview both layouts in every theme:
 ```bash
 npm run screenshots
 ```
+
+### Backing up the stored list
+
+The Stored panel's **Export** and **Import** controls move the saved list in and out as JSON, so it
+can be archived or carried to another machine. Export writes:
+
+> **Why Import opens its own window.** Choosing a file from a toolbar popup dismisses the popup the
+> moment the OS picker takes focus, which closes the extension message port before the background can
+> answer. `import.html` runs in a small window that survives the picker, reads the file, and calls the
+> same background import path.
+
+```json
+{
+  "kind": "youtube-scroll-saver-positions",
+  "version": 1,
+  "exportedAt": "2026-01-01T00:00:00.000Z",
+  "count": 1,
+  "positions": {
+    "https://www.youtube.com/@handle/videos": {
+      "videoId": "dQw4w9WgXcQ",
+      "type": "video",
+      "timestamp": 1700000000000,
+      "duration": "19:49"
+    }
+  }
+}
+```
+
+Import accepts that wrapper **or** a bare `{ "<url>": { … } }` map. It merges by default — an entry
+with the same URL is updated, every other entry is kept — skips anything that isn't an `http(s)` URL
+with a `videoId` or `scrollY`, and enables each imported channel at its root so the entries restore
+instead of sitting inert. The whole exchange is local; it is not a network feature.
 
 > **Note:** the classic layout originally loaded Playfair Display + Source Serif 4 from
 > `fonts.googleapis.com` — four external requests on every popup open, which contradicted this
@@ -151,6 +184,8 @@ scroll-saver/
 ├── popup-classic.html    # Popup HTML — classic (pre-2.0) layout
 ├── popup-classic.css     # Popup styles — classic layout
 ├── popup.js              # Popup functionality (shared by both layouts)
+├── import.html           # Import page - its own window (the popup can't survive the file picker)
+├── import.js             # Import page logic
 ├── icons/                # Extension icons
 │   ├── bookmark_16.png
 │   ├── bookmark_48.png
@@ -163,6 +198,7 @@ scroll-saver/
 ├── tools/verify-layout.mjs   # Layout toggle + previews, end to end
 ├── tools/verify-click-save.mjs # Regression: saving only on added channels
 ├── tools/verify-duration.mjs # Live test: duration scraped from a real channel
+├── tools/verify-transfer.mjs # Saved-list export/import, end to end
 ├── tools/screenshot-layouts.mjs  # Renders every layout/theme for review
 ├── package.sh            # Build script
 ├── LICENSE               # MIT License
@@ -311,7 +347,7 @@ When adding a locale:
 
 ## ✅ Verification
 
-Four scripts, all runnable from the repo root:
+Five scripts, all runnable from the repo root:
 
 | Script | Covers | Needs network |
 |---|---|---|
@@ -319,6 +355,7 @@ Four scripts, all runnable from the repo root:
 | `npm run verify:layout` | Manifest default popup, layout toggle + persistence, previews, thumbnail fallback | yes (CDN) |
 | `npm run verify:click-save` | Click-to-save is armed only for added channels; Add/Stop apply live | no |
 | `npm run verify:duration` | Scrapes a duration from a real channel page and asserts it is what got saved | yes (YouTube) |
+| `npm run verify:transfer` | Export writes a versioned JSON file; import validates, merges, skips junk, and re-enables channels | no |
 
 Each loads the real extension in Chromium rather than unit-testing in isolation — `/verify:layout`
 clicks the actual toggle button and checks `chrome.action.getPopup()`, `/verify:duration`
@@ -336,6 +373,26 @@ Two gotchas worth knowing if you extend them:
 
 ## 📝 Changelog
 
+### v2.1.0 (2026)
+- **Export / import the saved list** — the Stored panel gains **Export** (writes every saved position to a
+  versioned `scroll-saver-positions-*.json`) and **Import**, which opens a small dedicated window
+  (`import.html`) and reads that file back. Import runs outside the toolbar popup because the OS file
+  picker dismisses a popup and closes the message port mid-request; the background handler also now
+  answers on every path, even an unexpected error. Import merges by default,
+  re-validates every field in the background — malformed entries and non-`http(s)` keys are skipped and the
+  count is reported — and enables each imported channel at its root so restores actually run. The window is
+  a small state machine (choose → importing → result) and announces the outcome with a full-card success
+  view — an animated check badge and a large imported count — instead of a line of text. Covered by
+  `npm run verify:transfer`.
+- **Tighter Extended layout** — the utility controls (`Export Log`, `Vertical Menu`, theme) moved out of the
+  footer to a toolbar under the tagline, and card/entry/preview spacing was compacted.
+- **`Refresh` beside `Add`** — in both layouts Refresh now shares the Current header row instead of occupying
+  its own row; the compact layout uses an icon-only `↻` to fit its 200px column.
+- **Compact Stored header** — Export / Import / Delete all are now icon buttons with tooltips, and the
+  saved-position count sits beside the `Stored` title so the header stays on one line.
+- **One-click delete** — deleting a single saved video no longer shows a confirm dialog; the trash icon
+  removes it immediately. "Delete all" keeps its confirmation because it is bulk and hard to undo.
+
 ### v2.0.3 (2026)
 - **Preview-first entries** — the preview is now the only thing identifying a saved video.
   Clicking it opens the video, so the video ID and the separate go-to button are gone from both
@@ -344,9 +401,8 @@ Two gotchas worth knowing if you extend them:
   two-column grid, roughly halving the scrolling for a list of saved videos; entries without a
   preview span the full width so their titles still fit.
 - **Floating delete** — delete is now a trash icon on the preview's top-right, with a subtle
-  scale-up on hover as a pressability cue. It's obvious without cluttering the row, and the
-  destructive action is still a single click with a confirm. Entries without a preview get a
-  compact trash icon pinned to their top-right instead.
+  scale-up on hover as a pressability cue. It's obvious without cluttering the row. Entries
+  without a preview get a compact trash icon pinned to their top-right instead.
 
 ### v2.0.2 (2026)
 - **No stray saved videos** — click-to-save now runs only for channels you've actually added.
@@ -390,7 +446,7 @@ Two gotchas worth knowing if you extend them:
   - **Shorts support** — tracks both `/videos` and `/shorts` cards on a channel (`/@…`), saving the content ID + type and restoring it on return.
   - **Channel-level enablement** — one “Add” enables a whole channel at its `/@handle`, covering every tab; existing enablements and saved channels migrate automatically.
   - **Compact popup redesign** — fixed `640×400` window, slim header, two-column layout, and compact entry rows with inline icon actions.
-  - **Clearer & safer UI** — delete confirmations, tagline in the header, suffix-first URL display, higher text contrast in both themes.
+  - **Clearer & safer UI** — tagline in the header, suffix-first URL display, higher text contrast in both themes.
 
 ### v1.2.0 (2026)
 - **YouTube-only** — removed generic article/scroll tracking. The extension now injects only on YouTube and works exclusively on channel (`/@…`) pages.

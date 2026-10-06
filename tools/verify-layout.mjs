@@ -32,7 +32,7 @@ function unpackedId(absPath) {
 }
 
 const FILES = ['manifest.json', 'background.js', 'content.js', 'popup.html', 'popup.css',
-               'popup-classic.html', 'popup-classic.css', 'popup.js', 'LICENSE'];
+               'popup-classic.html', 'popup-classic.css', 'popup.js', 'import.html', 'import.js', 'LICENSE'];
 
 const ext = await mkdtemp(join(tmpdir(), 'ss-lay-ext-'));
 const profile = await mkdtemp(join(tmpdir(), 'ss-lay-prof-'));

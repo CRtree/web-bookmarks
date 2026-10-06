@@ -82,6 +82,49 @@ function getEnabledUrl(url) {
   return root || normalizeUrl(url);
 }
 
+// ---- Saved-position export / import ----
+// The popup can export the stored list to a JSON file and read it back. Import
+// re-validates every field here, so a malformed or hand-edited file cannot write
+// arbitrary keys into storage.
+function isValidPosition(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const hasVideo = typeof value.videoId === 'string' && value.videoId.length > 0;
+  const hasScroll = typeof value.scrollY === 'number' && isFinite(value.scrollY);
+  return hasVideo || hasScroll;
+}
+
+// Keep only the fields the extension understands, coerced to safe types.
+function sanitizePosition(value) {
+  const out = {};
+  const videoId = typeof value.videoId === 'string' ? value.videoId.trim().slice(0, 64) : '';
+  if (videoId) {
+    out.videoId = videoId;
+    out.type = value.type === 'shorts' ? 'shorts' : 'video';
+  }
+  out.timestamp = typeof value.timestamp === 'number' && isFinite(value.timestamp)
+    ? value.timestamp
+    : Date.now();
+  if (typeof value.duration === 'string' && /^(?:\d{1,2}:)?\d{1,2}:\d{2}$/.test(value.duration)) {
+    out.duration = value.duration;
+  }
+  if (typeof value.scrollY === 'number' && isFinite(value.scrollY) && value.scrollY >= 0) {
+    out.scrollY = Math.round(value.scrollY);
+  }
+  if (typeof value.title === 'string' && value.title.trim()) {
+    out.title = value.title.trim().slice(0, 300);
+  }
+  return out;
+}
+
+// Only accept http(s) keys; normalize them the same way saves do so an imported
+// entry lines up with the key the content script will look up on restore.
+function normalizeImportedUrl(url) {
+  if (typeof url !== 'string') return null;
+  const trimmed = url.trim();
+  if (!/^https?:\/\//i.test(trimmed)) return null;
+  return normalizeUrl(trimmed);
+}
+
 // Clean up old entries (older than 30 days)
 function cleanupOldEntries() {
   // Check if storage API is available
@@ -287,6 +330,88 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ success: true });
       });
     });
+    return true;
+  }
+
+  if (request.action === 'import_positions') {
+    // Always answer: an uncaught throw here closes the message port, which the
+    // caller surfaces as "the message port closed before a response was received".
+    try {
+      if (!chrome.storage || !chrome.storage.local) {
+        console.error('chrome.storage.local not available');
+        sendResponse({ success: false, error: 'Storage not available' });
+        return true;
+      }
+
+      // "merge" (default) upserts the supplied entries; "replace" also drops any
+      // stored position the file does not mention.
+      const mode = request.mode === 'replace' ? 'replace' : 'merge';
+      const incoming = request.positions;
+      const cleaned = {};
+      let skipped = 0;
+
+      if (incoming && typeof incoming === 'object' && !Array.isArray(incoming)) {
+        for (const [url, value] of Object.entries(incoming)) {
+          const normalized = normalizeImportedUrl(url);
+          if (!normalized || !isValidPosition(value)) {
+            skipped++;
+            continue;
+          }
+          cleaned[`yt_position_${normalized}`] = sanitizePosition(value);
+        }
+      }
+
+      const imported = Object.keys(cleaned).length;
+      if (imported === 0) {
+        sendResponse({ success: true, imported: 0, skipped, mode });
+        return true;
+      }
+
+      chrome.storage.local.get(null, (items) => {
+        if (chrome.runtime.lastError) {
+          console.error('import_positions: read failed:', chrome.runtime.lastError);
+          sendResponse({ success: false, error: chrome.runtime.lastError.message });
+          return;
+        }
+
+        const updates = Object.assign({}, cleaned);
+        const toRemove = [];
+        if (mode === 'replace') {
+          for (const key of Object.keys(items)) {
+            if (key.startsWith('yt_position_') && !cleaned[key]) toRemove.push(key);
+          }
+        }
+
+        // Enable each imported channel at its root. Restore only runs on added
+        // channels, so importing a position without this would save it but never
+        // scroll back to it.
+        const enabledSites = Object.assign({}, items.enabled_sites || {});
+        for (const key of Object.keys(cleaned)) {
+          const root = getChannelRootUrl(key.slice('yt_position_'.length));
+          if (root) enabledSites[root] = true;
+        }
+        updates.enabled_sites = enabledSites;
+
+        const commit = () => chrome.storage.local.set(updates, () => {
+          if (chrome.runtime.lastError) {
+            console.error('import_positions: write failed:', chrome.runtime.lastError);
+            sendResponse({ success: false, error: chrome.runtime.lastError.message });
+            return;
+          }
+          console.log('import_positions:', { imported, skipped, mode });
+          sendResponse({ success: true, imported, skipped, mode });
+        });
+
+        if (toRemove.length > 0) {
+          chrome.storage.local.remove(toRemove, commit);
+        } else {
+          commit();
+        }
+      });
+    } catch (error) {
+      console.error('Unexpected error in import_positions:', error);
+      sendResponse({ success: false, error: error && error.message ? error.message : String(error) });
+    }
     return true;
   }
 

@@ -31,22 +31,32 @@
       <section class="panel current">
         <div class="panel-head">
           <span class="panel-label">Current</span>
-          <button id="add-page" class="btn-add">Add</button>
+          <div class="panel-head-right">
+            <button id="refresh" class="btn" title="Refresh" aria-label="Refresh">↻</button>
+            <button id="add-page" class="btn-add">Add</button>
+          </div>
         </div>
         <div id="current-info" class="current-info">
           <p class="entry-loading">Loading&hellip;</p>
-        </div>
-        <div class="current-actions">
-          <button id="refresh" class="btn">↻ Refresh</button>
         </div>
       </section>
 
       <section class="panel stored">
         <div class="panel-head">
-          <span class="panel-label">Stored</span>
-          <div class="panel-head-right">
+          <div class="panel-head-left">
+            <span class="panel-label">Stored</span>
             <span class="card-count"><span id="stats-count">0</span> saved</span>
-            <button id="clear-all" class="link">Delete all</button>
+          </div>
+          <div class="header-actions">
+            <button id="export-positions" class="header-icon" title="Export saved positions to a JSON file" aria-label="Export saved positions">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+            </button>
+            <button id="import-positions" class="header-icon" title="Import saved positions from a JSON file" aria-label="Import saved positions">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 21V9"/><path d="m7 14 5-5 5 5"/><path d="M5 3h14"/></svg>
+            </button>
+            <button id="clear-all" class="header-icon danger" title="Delete all saved positions" aria-label="Delete all saved positions">
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+            </button>
           </div>
         </div>
         <div id="positions-list" class="stored-list">

@@ -25,6 +25,8 @@ cp popup.css "${TARGET_DIR}/"
 cp popup-classic.html "${TARGET_DIR}/"
 cp popup-classic.css "${TARGET_DIR}/"
 cp popup.js "${TARGET_DIR}/"
+cp import.html "${TARGET_DIR}/"
+cp import.js "${TARGET_DIR}/"
 cp LICENSE "${TARGET_DIR}/"
 
 # Copy icons directory

@@ -241,18 +241,29 @@ body {
   transform: translateY(1px);
 }
 
-.link {
-  background: none;
+/* Icon actions in a panel header (export / import / delete all). Text labels
+   were too wide, so these are icons with title + aria labels. */
+.header-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
   border: none;
+  border-radius: 6px;
+  background: transparent;
   color: var(--text-3);
-  font-size: 12px;
   cursor: pointer;
-  padding: 2px 4px;
-  border-radius: 4px;
-  transition: color 0.12s ease;
+  transition: background 0.12s ease, color 0.12s ease;
 }
 
-.link:hover {
+.header-icon:hover {
+  background: var(--surface-2);
+  color: var(--text);
+}
+
+.header-icon.danger:hover {
   color: var(--danger);
 }
 
@@ -304,10 +315,25 @@ body {
   color: var(--text-3);
 }
 
+.panel-head-left {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
 .panel-head-right {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
+}
+
+/* The Stored header's icon actions sit tighter than the Current header's text
+   buttons; the glyphs already read as spaced inside their 24px hit area. */
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0;
 }
 
 .card-count {
@@ -327,14 +353,6 @@ body {
   padding: 12px 14px;
   flex: 1;
   overflow-y: auto;
-}
-
-.current-actions {
-  display: flex;
-  gap: 6px;
-  padding: 9px 12px;
-  border-top: 1px solid var(--border-2);
-  flex-shrink: 0;
 }
 
 /* ---- Stored list ---- */
@@ -430,13 +448,6 @@ body {
      trailing ellipsis must not eat the suffix. Clip instead. */
   text-overflow: clip;
   margin-top: 1px;
-}
-
-.entry-actions {
-  display: flex;
-  gap: 4px;
-  align-items: center;
-  flex-shrink: 0;
 }
 
 .entry-link {
