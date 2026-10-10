@@ -291,6 +291,127 @@ document.addEventListener('DOMContentLoaded', function() {
     return '...' + text.substring(Math.max(0, text.length - (maxLength - 3)));
   }
 
+  // ---- Watch-page Prev / Next ----
+  // On a regular video watch page the Current panel shows the video preview plus
+  // Prev / Next buttons that walk the channel's upload list (background fetches
+  // the ordered list from YouTube's inner API). Shorts pages are not handled yet.
+  function parseWatchUrl(url) {
+    if (!url) return null;
+    try {
+      const u = new URL(url);
+      const host = u.hostname.replace(/^www\./, '');
+      let videoId = null;
+      if ((host === 'youtube.com' || host === 'm.youtube.com') && u.pathname === '/watch') {
+        videoId = u.searchParams.get('v');
+      } else if (host === 'youtu.be') {
+        videoId = u.pathname.slice(1).split('/')[0];
+      }
+      if (!videoId || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) return null;
+      return { videoId: videoId, listId: u.searchParams.get('list') || null };
+    } catch (e) {
+      return null;
+    }
+  }
+
+  function escapeHtml(value) {
+    return String(value == null ? '' : value)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function watchThumbHtml(video) {
+    const duration = formatDuration(video.duration);
+    const badge = duration ? `<span class="entry-duration">${escapeHtml(duration)}</span>` : '';
+    const src = video.thumbnail || thumbnailUrl(video.videoId);
+    return `<div class="entry-thumb watch-thumb">`
+      + `<img src="${escapeHtml(src)}" alt="" referrerpolicy="no-referrer">${badge}</div>`;
+  }
+
+  function watchArrowHtml(video, dir) {
+    const label = dir === 'prev' ? 'Previous' : 'Next';
+    const glyph = dir === 'prev' ? '\u2039' : '\u203a';
+    if (!video) {
+      return `<span class="watch-nav-arrow ${dir} is-disabled" aria-hidden="true">${glyph}</span>`;
+    }
+    const title = escapeHtml(video.title || 'video');
+    return `<button type="button" class="watch-nav-arrow ${dir}" data-video-id="${escapeHtml(video.videoId)}"`
+      + ` title="${label}: ${title}" aria-label="${label}: ${title}">${glyph}</button>`;
+  }
+
+  function watchNavHtml(video, prev, next, index, noteOverride) {
+    const note = noteOverride || (index ? `Video ${index} in this channel` : 'Current video');
+    return `
+      <div class="watch-nav">
+        <div class="watch-nav-media">
+          ${watchArrowHtml(prev, 'prev')}
+          ${watchThumbHtml(video)}
+          ${watchArrowHtml(next, 'next')}
+        </div>
+        <div class="watch-nav-title">${escapeHtml(truncate(video.title || 'Untitled', 46))}</div>
+        <div class="watch-nav-note">${escapeHtml(note)}</div>
+      </div>`;
+  }
+
+  // Ask the background to refresh the channel's saved video and then navigate the
+  // active tab. Keeping both in one message lets the background own the storage
+  // write (so it cannot race the popup closing) and the navigation.
+  function wireWatchNavigation(root, tabId, nav) {
+    if (!root) return;
+    const targets = { prev: nav && nav.prev, next: nav && nav.next };
+    root.querySelectorAll('.watch-nav-arrow[data-video-id]').forEach(function(btn) {
+      btn.addEventListener('click', function() {
+        const dir = btn.classList.contains('prev') ? 'prev' : 'next';
+        const target = targets[dir];
+        if (!target || typeof tabId !== 'number') return;
+        // Refresh the channel's resume points for its own uploads list: the
+        // Videos-tab spot moves to the target video, and the spot that led here
+        // is matched by the video we are leaving.
+        const useChannel = !!(nav && nav.channelUploads);
+        chrome.runtime.sendMessage({
+          action: 'watch_nav_goto',
+          tabId: tabId,
+          videoId: target.videoId,
+          fromVideoId: useChannel ? (nav.videoId || null) : null,
+          channelUrl: useChannel ? (nav.channelUrl || null) : null,
+          duration: target.duration || ''
+        }, function() {
+          window.close();
+        });
+        // Safety net if the background never answers.
+        setTimeout(function() { window.close(); }, 600);
+      });
+    });
+  }
+
+  function renderWatchFallback(tab, info) {
+    const video = { videoId: info.videoId, title: tab.title, duration: '', thumbnail: null };
+    currentInfoEl.innerHTML = watchNavHtml(video, null, null, null, 'Prev / next unavailable');
+    wireWatchNavigation(currentInfoEl, tab.id, null);
+    wireThumbnailFallbacks(currentInfoEl);
+  }
+
+  function renderWatchNavigation(tab, info) {
+    currentInfoEl.innerHTML = '<p class="entry-loading">Loading&hellip;</p>';
+    chrome.runtime.sendMessage(
+      { action: 'get_watch_nav', videoId: info.videoId, listId: info.listId, tabId: tab.id },
+      function(response) {
+        if (chrome.runtime.lastError || !response || !response.ok || !response.nav) {
+          console.warn('Popup: watch navigation unavailable, showing preview only');
+          renderWatchFallback(tab, info);
+          return;
+        }
+        const nav = response.nav;
+        const video = nav.current || { videoId: info.videoId, title: tab.title };
+        currentInfoEl.innerHTML = watchNavHtml(video, nav.prev, nav.next, nav.index);
+        wireWatchNavigation(currentInfoEl, tab.id, nav);
+        wireThumbnailFallbacks(currentInfoEl);
+      }
+    );
+  }
+
   // Update current page info
   function updateCurrentPageInfo() {
     console.log('Popup: Updating current page info...');
@@ -316,6 +437,14 @@ document.addEventListener('DOMContentLoaded', function() {
 
           isTracking = enabledResponse.enabled === true;
           updateAddButton();
+
+          // Regular videos get Prev / Next navigation instead of the saved
+          // scroll-position entry. Shorts pages keep the existing behavior.
+          const watchInfo = parseWatchUrl(tab.url);
+          if (watchInfo) {
+            renderWatchNavigation(tab, watchInfo);
+            return;
+          }
 
           chrome.runtime.sendMessage(
             { action: 'get_current_tab_position' },

@@ -16,9 +16,13 @@ A focused alternative to generic "scroll position saver" tools: it does one thin
 ### Why You'll Love It
 
 - **Watch without worry** - Close tabs freely, knowing your spot is saved
+- **Continue down a channel** - On a video, the popup shows **‹ Prev** / **Next ›** to step
+  through the channel's uploads without scrolling a long page. The channel's **Videos** tab spot
+  follows along as you watch, so the next visit there resumes at the latest video.
 - **Zero friction** - Works automatically in the background
 - **Privacy first** - Saved positions, enabled channels and settings stay on your device. The
-  only outbound request is the thumbnail image (see [Privacy](#-privacy--security)).
+  only outbound requests are thumbnails and, on a video page, the channel's own video list
+  (see [Privacy](#-privacy--security)).
 - **YouTube focused** - Laser-targeted to YouTube channel pages
 
 
@@ -143,20 +147,30 @@ instead of sitting inert. The whole exchange is local; it is not a network featu
 
 - **100% Local Storage** - All data stored using `chrome.storage.local`
 - **No accounts, no analytics, no servers of ours** - Positions, enabled channels and settings
-  never leave your browser. See "the one network request" below.
+  never leave your browser. See "the outbound requests" below.
 - **Transparent** - Open source, auditable code
 - **Minimal Permissions** - Only requests what's absolutely necessary
 
-### The one network request
+### The outbound requests
 
-Saved entries show a video thumbnail, loaded from
-`https://i.ytimg.com/vi/<videoId>/mqdefault.jpg`. That URL contains the video ID, so opening
-the popup tells YouTube which videos are in your saved list. This is the extension's **only**
-outbound request.
+There are two, both to YouTube and neither involving an account, an API key of yours, or a
+server of ours:
 
-- The URL is derived from the `videoId` already in local storage — no lookup, no API key.
-- `loading="lazy"` fetches only the rows actually visible in the list.
-- `referrerpolicy="no-referrer"` keeps the extension URL out of the request.
+1. **Thumbnails.** Saved entries show a video thumbnail, loaded from
+   `https://i.ytimg.com/vi/<videoId>/mqdefault.jpg`. That URL contains the video ID, so opening
+   the popup tells YouTube which videos are in your saved list.
+   - The URL is derived from the `videoId` already in local storage — no lookup, no API key.
+   - `loading="lazy"` fetches only the rows actually visible in the list.
+   - `referrerpolicy="no-referrer"` keeps the extension URL out of the request.
+
+2. **Watch-page Prev / Next.** When you open the popup on a regular YouTube video page, the
+   content script asks YouTube for that channel's ordered uploads list so the **‹ Prev** /
+   **Next ›** buttons know what comes before and after the current video. (That list omits
+   members-only videos, so those are skipped.) The request is made from the video page itself
+   (same origin as youtube.com, using the page's own web client), and only while the popup is
+   open on a watch page. The result is cached locally, and the background never makes the
+   request, so the extension origin is never exposed to it.
+
 - Everything else (positions, enabled channels, theme, layout) stays local.
 
 ### Permissions Used
@@ -167,7 +181,7 @@ outbound request.
 | `activeTab` | Get current tab info for popup |
 | `alarms` | Schedule weekly data cleanup |
 | `tabs` | Query tab information |
-| `<all_urls>` | Inject everywhere, but only YouTube channel pages are tracked |
+| `<all_urls>` | Inject everywhere, but only YouTube channel/video pages are used, and the watch-page list is fetched from the page's own origin |
 
 
 ## 🛠️ Development

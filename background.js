@@ -160,6 +160,123 @@ function cleanupOldEntries() {
   });
 }
 
+// ---- Watch-page video navigation (Prev / Next in a channel's upload list) ----
+//
+// YouTube's watch page calls the internal endpoint /youtubei/v1/next with the
+// channel's uploads playlist (UU<channelId without "UC">). One request returns the
+// current video's absolute position in the playlist plus a window of ~99 adjacent
+// videos (typically 20 before / 78 after). That is enough to offer Prev / Next
+// without scrolling a long channel page.
+//
+// The fetch itself runs in the content script (same-origin with youtube.com): a
+// request from the extension's service worker is rejected with HTTP 403 by
+// YouTube's bot protection, while the page's own origin passes. This module only
+// caches the result and proxies popup requests to the content script.
+// The prefix and schema are versioned together: a nav cached by an earlier build
+// may carry a stale channelUploads/channelUrl, which would make the popup skip
+// the position refresh, so old entries must be ignored rather than reused.
+const YT_NEXT_CACHE_PREFIX = 'yt_nav_';
+const YT_NEXT_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const WATCH_NAV_SCHEMA = 2;
+
+// Extract the video id (and optional playlist id) from a watch URL. Regular
+// videos only for now; Shorts pages are a separate surface handled later.
+function parseYouTubeWatchUrl(url) {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const host = u.hostname.replace(/^www\./, '');
+    let videoId = null;
+    if (host === 'youtube.com' || host === 'm.youtube.com') {
+      if (u.pathname === '/watch') videoId = u.searchParams.get('v');
+    } else if (host === 'youtu.be') {
+      videoId = u.pathname.slice(1).split('/')[0];
+    }
+    if (!videoId || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) return null;
+    return { videoId: videoId, listId: u.searchParams.get('list') || null };
+  } catch (e) {
+    return null;
+  }
+}
+
+function watchNavCacheKey(videoId, listId) {
+  return YT_NEXT_CACHE_PREFIX + videoId + (listId ? '--' + listId : '');
+}
+
+function getCachedWatchNavigation(videoId, listId, callback) {
+  if (!chrome.storage || !chrome.storage.local) return callback(null);
+  const key = watchNavCacheKey(videoId, listId);
+  chrome.storage.local.get([key], (result) => {
+    const entry = result && result[key];
+    if (entry && entry.nav && entry.nav.schema === WATCH_NAV_SCHEMA
+        && Date.now() - (entry.ts || 0) < YT_NEXT_CACHE_TTL_MS) {
+      return callback(entry.nav);
+    }
+    callback(null);
+  });
+}
+
+function cacheWatchNavigation(videoId, listId, nav) {
+  if (!chrome.storage || !chrome.storage.local || !nav) return;
+  chrome.storage.local.set({ [watchNavCacheKey(videoId, listId)]: { ts: Date.now(), nav: nav } });
+}
+
+// True only for the channel's "Videos" tab page, e.g.
+// https://www.youtube.com/@handle/videos. Prev / Next walks the channel's
+// uploads, so that tab is the page whose saved spot can safely follow along.
+function isChannelVideosUrl(url, channelRoot) {
+  if (!channelRoot) return false;
+  try {
+    const u = new URL(url);
+    if (!u.hostname.includes('youtube.com')) return false;
+    const base = channelRoot.replace(/\/+$/, '');
+    const want = (base + '/videos').toLowerCase();
+    const got = (u.origin + u.pathname.replace(/\/+$/, '')).toLowerCase();
+    return got === want;
+  } catch (e) {
+    return false;
+  }
+}
+
+// Move the channel's Videos-tab "resume video" to the video just navigated to,
+// so the stored list follows a binge session instead of reopening the original
+// video.
+//
+// Only the Videos tab is ever touched: Prev / Next walks exactly that list, so
+// every target is guaranteed to exist on it. Home and Shorts show different
+// lists, and a Videos-tab video may not be present on them — the next restore
+// would then scan the whole page hunting for it and drop the position (the
+// scroll-to-bottom bug). Called before the tab navigates, so the update is
+// durable when the new page loads.
+function updateChannelPosition(info, done) {
+  if (!chrome.storage || !chrome.storage.local) return done && done();
+  const targetRoot = getChannelRootUrl(info.channelUrl || '');
+  if (!targetRoot) return done && done();
+  chrome.storage.local.get(null, (items) => {
+    if (chrome.runtime.lastError || !items) return done && done();
+    const updates = {};
+    for (const key of Object.keys(items)) {
+      if (!key.startsWith('yt_position_')) continue;
+      const value = items[key];
+      if (!value) continue;
+      const url = key.slice('yt_position_'.length);
+      if (!isChannelVideosUrl(url, targetRoot)) continue;
+      const next = Object.assign({}, value, {
+        videoId: info.videoId,
+        type: 'video',
+        timestamp: Date.now()
+      });
+      if (info.duration) next.duration = info.duration;
+      updates[key] = next;
+    }
+    if (Object.keys(updates).length === 0) return done && done();
+    chrome.storage.local.set(updates, () => {
+      console.log('watch_nav_goto: refreshed', Object.keys(updates).length, 'position(s)');
+      done && done();
+    });
+  });
+}
+
 // Handle messages from popup or content scripts
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   console.log('Background: Received message:', request.action);
@@ -167,6 +284,90 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
   if (request.action === 'ping') {
     console.log('Background: Ping received, responding...');
     sendResponse({ status: 'ok', timestamp: Date.now() });
+    return true;
+  }
+
+  if (request.action === 'get_watch_nav') {
+    // Prev / Next for the video open in the active tab. Cache-first so the
+    // popup's 10s auto-refresh (and reopening the popup) is free.
+    const info = request.videoId
+      ? { videoId: request.videoId, listId: request.listId || null }
+      : parseYouTubeWatchUrl(request.url);
+    if (!info) {
+      sendResponse({ ok: false, error: 'not a watch page' });
+      return true;
+    }
+    getCachedWatchNavigation(info.videoId, info.listId, (cached) => {
+      if (cached) {
+        sendResponse({ ok: true, nav: cached, cached: true });
+        return;
+      }
+      // Proxy to the tab's content script so the request is same-origin with
+      // youtube.com (the service worker's own fetch gets HTTP 403).
+      const askContentScript = (tabId) => {
+        chrome.tabs.sendMessage(
+          tabId,
+          { action: 'fetch_watch_nav', videoId: info.videoId, listId: info.listId },
+          (resp) => {
+            if (chrome.runtime.lastError || !resp || !resp.ok || !resp.nav) {
+              const reason = (chrome.runtime.lastError && chrome.runtime.lastError.message)
+                || (resp && resp.error) || 'fetch failed';
+              console.warn('get_watch_nav failed:', reason);
+              sendResponse({ ok: false, error: reason });
+              return;
+            }
+            cacheWatchNavigation(info.videoId, info.listId, resp.nav);
+            sendResponse({ ok: true, nav: resp.nav });
+          }
+        );
+      };
+      if (typeof request.tabId === 'number') {
+        askContentScript(request.tabId);
+      } else {
+        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
+          if (!tabs || !tabs[0]) {
+            sendResponse({ ok: false, error: 'no active tab' });
+            return;
+          }
+          askContentScript(tabs[0].id);
+        });
+      }
+    });
+    return true;
+  }
+
+  if (request.action === 'watch_nav_goto') {
+    // Prev / Next click: refresh the channel's saved video, then navigate. Doing
+    // both here (rather than in the popup) keeps the storage write from racing
+    // the popup closing, and the popup navigating itself.
+    const videoId = request.videoId;
+    if (!videoId || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
+      sendResponse({ ok: false, error: 'invalid video id' });
+      return true;
+    }
+    const navigate = () => {
+      if (typeof request.tabId !== 'number' || !chrome.tabs) {
+        sendResponse({ ok: true, navigated: false });
+        return;
+      }
+      chrome.tabs.update(request.tabId, { url: 'https://www.youtube.com/watch?v=' + videoId }, () => {
+        sendResponse({ ok: true, navigated: true });
+      });
+    };
+    console.log('watch_nav_goto:', JSON.stringify({
+      videoId,
+      fromVideoId: request.fromVideoId || null,
+      channelUrl: request.channelUrl || null
+    }));
+    if (request.channelUrl) {
+      updateChannelPosition({
+        videoId: videoId,
+        channelUrl: request.channelUrl,
+        duration: request.duration
+      }, navigate);
+    } else {
+      navigate();
+    }
     return true;
   }
 
@@ -478,6 +679,22 @@ function migrateToEnabledSites() {
     }
   });
 }
+
+// Housekeeping: an earlier version cached a per-channel Videos-tab index under
+// yt_vindex_. That approach was dropped, so remove any leftovers.
+function removeVideoIndexCache() {
+  if (!chrome.storage || !chrome.storage.local) return;
+  chrome.storage.local.get(null, (items) => {
+    const stale = Object.keys(items || {}).filter(
+      (k) => k.startsWith('yt_vindex_') || k.startsWith('yt_next_')
+    );
+    if (stale.length) {
+      chrome.storage.local.remove(stale);
+      console.log('Removed', stale.length, 'stale video-index cache entries');
+    }
+  });
+}
+removeVideoIndexCache();
 
 // Clean up weekly
 if (chrome.alarms) {

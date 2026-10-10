@@ -219,6 +219,15 @@
     });
   }
 
+  // A card that is in the DOM but not laid out yet (hidden, or a collapsed
+  // placeholder) measures 0 tall and sits at the top of the page. Trusting it
+  // makes the restore scroll to 0 instead of scanning for the real card — which
+  // is what happens when YouTube renders a channel tab's grid a frame or two
+  // after an in-app navigation. Only a card with real height counts as found.
+  function isRendered(link) {
+    return findVideoContainer(link).getBoundingClientRect().height > 0;
+  }
+
   function findVideoInDOM(videoId, type) {
     // Regular video cards link via /watch?v=<id>, shorts cards via /shorts/<id>.
     // Default to 'video' for back-compat with entries saved before the type field.
@@ -236,7 +245,12 @@
         links = querySelectorAllDeep(`a[href*="/shorts/${videoId}"]`);
       }
     }
-    return links.length > 0 ? links[0] : null;
+    // Skip matches that are present but not rendered yet; the caller then scans,
+    // which is what triggers the grid to finish laying out.
+    for (const link of links) {
+      if (isRendered(link)) return link;
+    }
+    return null;
   }
 
   function scrollVideoIntoView(link) {
@@ -464,6 +478,15 @@
           return;
         }
 
+        // The page can navigate while the read is in flight. Acting now would
+        // apply the previous page's video to the new page's DOM — and a failed
+        // scan would remove the NEW page's saved position, not the old one.
+        if (normalizeUrl(targetUrl) !== normalizeUrl(currentUrl)) {
+          console.log('[SS:yt] Page changed mid-restore, abandoning:', targetUrl);
+          finishRestore();
+          return;
+        }
+
         const saved = result[key];
         if (!saved || !saved.videoId) {
           console.log('[SS:yt] No saved videoId found');
@@ -634,6 +657,11 @@
     // be handled once even when it reuses a URL handled earlier in this document
     // (for example returning to the same channel from one of its videos).
     function handleUrlChange() {
+      // Any restore or scan left running from the previous page is now moot: it
+      // would either block this page's restore via isRestoring, or keep scanning
+      // for the old video in the new page's DOM.
+      cleanupYTScan();
+      isRestoring = false;
       restoredThisDocument.clear();
       lastUrl = window.location.href;
       currentUrl = lastUrl;
@@ -652,17 +680,25 @@
       });
     }
 
-    // Observe DOM mutations that might indicate route change
-    const observer = new MutationObserver(() => {
-      if (window.location.href !== lastUrl) {
-        handleUrlChange();
-      }
-    });
+    // A route change is detected purely by comparing the URL, whatever triggered
+    // it. This matters for YouTube: switching channel tabs only mutates shadow
+    // DOM, which MutationObserver cannot see, so the observer alone misses it and
+    // the stored video is never restored on an in-app tab switch.
+    function maybeHandleUrlChange() {
+      if (window.location.href !== lastUrl) handleUrlChange();
+    }
 
+    const observer = new MutationObserver(maybeHandleUrlChange);
     observer.observe(document.body, {
       childList: true,
       subtree: true
     });
+
+    // YouTube fires this after each in-app navigation; the poll is the safety
+    // net for SPAs (and shadow-DOM renders) that fire neither a mutation we can
+    // see nor a popstate.
+    document.addEventListener('yt-navigate-finish', maybeHandleUrlChange);
+    setInterval(maybeHandleUrlChange, 1000);
 
     // Also listen to history API changes
     const originalPushState = history.pushState;
@@ -670,30 +706,16 @@
 
     history.pushState = function(...args) {
       originalPushState.apply(this, args);
-      setTimeout(() => {
-        if (window.location.href !== lastUrl) {
-          handleUrlChange();
-        }
-      }, 100);
+      setTimeout(maybeHandleUrlChange, 100);
     };
 
     history.replaceState = function(...args) {
       originalReplaceState.apply(this, args);
-      setTimeout(() => {
-        if (window.location.href !== lastUrl) {
-          handleUrlChange();
-        }
-      }, 100);
+      setTimeout(maybeHandleUrlChange, 100);
     };
 
     // Listen to popstate (back/forward navigation)
-    window.addEventListener('popstate', () => {
-      setTimeout(() => {
-        if (window.location.href !== lastUrl) {
-          handleUrlChange();
-        }
-      }, 100);
-    });
+    window.addEventListener('popstate', () => setTimeout(maybeHandleUrlChange, 100));
   }
 
   // Set up tracking for YouTube channel pages (video-ID-only)
@@ -767,6 +789,167 @@
     const pathname = window.location.pathname;
     return (hostname.includes('youtube.com') || hostname.includes('youtu.be')) &&
            pathname.startsWith('/@');
+  }
+
+  // ---- Watch-page Prev / Next (same-origin Inner API fetch) ----
+  //
+  // YouTube's watch page calls /youtubei/v1/next with the channel's uploads
+  // playlist (UU<channelId without "UC">). One request returns the current
+  // video's absolute position plus a window of ~99 adjacent videos. That
+  // playlist omits members-only videos and mixes in Shorts; a members-only video
+  // is therefore skipped by design.
+  //
+  // This MUST run in the content script, not the service worker: a request from
+  // the extension origin is rejected with HTTP 403 by YouTube's bot protection,
+  // while a request from the page's own origin passes. The current WEB client
+  // version comes from the page's ytcfg, so it never goes stale.
+  const YT_NAV_FALLBACK = {
+    // The public WEB key every YouTube page ships, used only if the page's
+    // inline ytcfg cannot be read. Not a user secret.
+    key: 'AIzaSyAO_FJ2SlqU8Q4STEHLGCilw_Y9_11qcW8',
+    version: '2.20240101.00.00'
+  };
+
+  function readInnertubeConfig() {
+    const cfg = { key: YT_NAV_FALLBACK.key, version: YT_NAV_FALLBACK.version };
+    try {
+      const scripts = document.querySelectorAll('script:not([src])');
+      for (let i = 0; i < scripts.length; i++) {
+        const text = scripts[i].textContent;
+        if (!text) continue;
+        if (!cfg.keyFound) {
+          const k = text.match(/"INNERTUBE_API_KEY":"([^"]+)"/);
+          if (k) { cfg.key = k[1]; cfg.keyFound = true; }
+        }
+        if (!cfg.versionFound) {
+          const v = text.match(/"INNERTUBE_CONTEXT_CLIENT_VERSION":"([^"]+)"/);
+          if (v) { cfg.version = v[1]; cfg.versionFound = true; }
+        }
+        if (cfg.keyFound && cfg.versionFound) break;
+      }
+    } catch (e) { /* keep fallbacks */ }
+    return cfg;
+  }
+
+  function ytNavPanel(json) {
+    const panel = json && json.contents && json.contents.twoColumnWatchNextResults
+      && json.contents.twoColumnWatchNextResults.playlist
+      && json.contents.twoColumnWatchNextResults.playlist.playlist;
+    if (!panel || !Array.isArray(panel.contents)) return null;
+    return panel;
+  }
+
+  function ytNavItem(item) {
+    const title = (item.title && (item.title.simpleText
+      || (item.title.runs || []).map(function(r) { return r.text; }).join(''))) || '';
+    const thumbs = item.thumbnail && item.thumbnail.thumbnails;
+    return {
+      videoId: item.videoId,
+      title: title,
+      duration: (item.lengthText && item.lengthText.simpleText) || '',
+      thumbnail: thumbs && thumbs.length ? thumbs[thumbs.length - 1].url : null
+    };
+  }
+
+  function ytNavFetch(path, body, cfg) {
+    return fetch('/youtubei/v1/' + path + '?key=' + encodeURIComponent(cfg.key) + '&prettyPrint=false', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-YouTube-Client-Name': '1',
+        'X-YouTube-Client-Version': cfg.version,
+        'X-Origin': 'https://www.youtube.com',
+        'X-Youtube-Bootstrap-Logged-In': 'false',
+        'X-Goog-Api-Format-Version': '1'
+      },
+      body: JSON.stringify(body)
+    }).then(function(res) {
+      if (!res.ok) throw new Error('YouTube API HTTP ' + res.status);
+      return res.json();
+    });
+  }
+
+  // Reduce an owner profile URL ("http://www.youtube.com/@handle") to its
+  // https channel root, which is how stored positions are keyed.
+  function normalizeChannelProfileUrl(raw) {
+    if (!raw) return null;
+    try {
+      const u = new URL(raw.indexOf('http') === 0 ? raw : 'https://' + raw);
+      if (!u.hostname.includes('youtube.com')) return null;
+      const m = u.pathname.match(/^\/(@[^/]+|channel\/[A-Za-z0-9_-]+)/);
+      if (!m) return null;
+      return 'https://www.youtube.com/' + m[1];
+    } catch (e) { return null; }
+  }
+
+  async function fetchWatchNav(videoId, listId) {
+    const cfg = readInnertubeConfig();
+    const context = { client: { clientName: 'WEB', clientVersion: cfg.version, hl: 'en', gl: 'US' } };
+    // The cheap /player response (~10 KB) gives the channel id and the channel
+    // page URL, needed both to find the channel's videos and to refresh its
+    // stored position when the user navigates.
+    const player = await ytNavFetch('player', { context: context, videoId: videoId }, cfg);
+    const channelId = player && player.videoDetails && player.videoDetails.channelId;
+    const channelUrl = normalizeChannelProfileUrl(
+      player && player.microformat && player.microformat.playerMicroformatRenderer
+        && player.microformat.playerMicroformatRenderer.ownerProfileUrl
+    );
+
+    // The channel's uploads playlist (or an explicit list=). One request returns
+    // the video's position plus ~99 neighbours. It omits members-only videos and
+    // mixes in Shorts, so both are skipped by design.
+    let playlistId = listId;
+    if (!playlistId) {
+      if (!channelId) throw new Error('channel id unavailable');
+      playlistId = 'UU' + channelId.slice(2);
+    }
+    const json = await ytNavFetch('next', { context: context, videoId: videoId, playlistId: playlistId }, cfg);
+    const panel = ytNavPanel(json);
+    if (!panel) throw new Error('no playlist panel');
+    const items = panel.contents.map(function(c) {
+      return c && c.playlistPanelVideoRenderer;
+    }).filter(Boolean);
+    let pos = -1;
+    for (let i = 0; i < items.length; i++) { if (items[i].videoId === videoId) { pos = i; break; } }
+    if (pos < 0) { for (let i = 0; i < items.length; i++) { if (items[i].selected) { pos = i; break; } } }
+    if (pos < 0) throw new Error('current video not in playlist');
+    const current = ytNavItem(items[pos]);
+    // Guard against the "video not actually in this playlist" case, where
+    // YouTube still returns a panel but the selected entry is not our video.
+    if (current.videoId !== videoId) throw new Error('playlist mismatch');
+    return {
+      // Bump when the nav shape changes; the background ignores older caches.
+      schema: 2,
+      videoId: videoId,
+      playlistId: playlistId,
+      index: typeof panel.currentIndex === 'number' ? panel.currentIndex : null,
+      current: current,
+      // Channel identity, used to refresh the channel's stored position. Only
+      // safe for the channel's own uploads list; an arbitrary list= may span
+      // channels.
+      channelId: channelId || null,
+      channelUrl: channelUrl || null,
+      channelUploads: !!(channelId && playlistId === 'UU' + channelId.slice(2)),
+      // Items are ordered newest -> oldest, so the previous array entry is the
+      // newer upload and the next entry is the older one.
+      prev: pos > 0 ? ytNavItem(items[pos - 1]) : null,
+      next: pos + 1 < items.length ? ytNavItem(items[pos + 1]) : null
+    };
+  }
+
+  // The background proxies popup requests here so the fetch is same-origin.
+  if (chrome.runtime && chrome.runtime.onMessage) {
+    chrome.runtime.onMessage.addListener(function(request, sender, sendResponse) {
+      if (!request || request.action !== 'fetch_watch_nav') return;
+      fetchWatchNav(request.videoId, request.listId)
+        .then(function(nav) { sendResponse({ ok: true, nav: nav }); })
+        .catch(function(err) {
+          console.warn('[SS:nav] fetch failed:', err && err.message);
+          sendResponse({ ok: false, error: (err && err.message) || 'fetch failed' });
+        });
+      return true; // async response
+    });
   }
 
   // Initialize

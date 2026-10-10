@@ -615,3 +615,73 @@ body {
   color: var(--text-3);
   font-size: 12px;
 }
+
+/* ---- Watch-page Prev / Next (Current panel) ---- */
+
+.watch-nav-media {
+  position: relative;
+}
+
+.current-info .watch-nav-media .entry-thumb {
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  margin-bottom: 0;
+}
+
+/* Circular arrows overlaid on the preview edges; the hover fill uses the accent
+   colour so the pair reads as the primary action of the panel. */
+.watch-nav-arrow {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 22px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transform: translateY(-50%);
+  transition: background 0.12s ease, transform 0.12s ease;
+}
+
+.watch-nav-arrow.prev { left: 8px; }
+.watch-nav-arrow.next { right: 8px; }
+
+.watch-nav-arrow:hover,
+.watch-nav-arrow:focus-visible {
+  background: var(--accent);
+  transform: translateY(-50%) scale(1.1);
+}
+
+.watch-nav-arrow:active {
+  transform: translateY(-50%) scale(0.95);
+}
+
+.watch-nav-arrow.is-disabled {
+  opacity: 0.35;
+  cursor: default;
+  pointer-events: none;
+}
+
+.watch-nav-title {
+  margin-top: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text);
+  line-height: 1.3;
+}
+
+.watch-nav-note {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--text-3);
+}
