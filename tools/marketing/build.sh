@@ -7,9 +7,12 @@
 #    marketing-tile-440x280.{png,jpg}          small promo tile
 #    marketing-screenshot-<layout>-<theme>-640x400.{png,jpg}    screenshots (crisp)
 #    marketing-screenshot-<layout>-<theme>-1280x800.png         high-res screenshots
+#    marketing-feature-watch-nav-{1280x800,640x400}.{png,jpg}   Prev / Next feature card
+#    marketing-feature-backup-{1280x800,640x400}.{png,jpg}      backup / restore feature card
 #
 #  <layout> is modern (the default) or classic; <theme> is light or dark.
-#  Chrome Web Store allows up to 5 screenshots.
+#  Chrome Web Store allows up to 5 screenshots; there are 6 candidates (4 popup
+#  shots + the 2 feature cards), so pick 5 when uploading.
 #
 #  Requires: Node + Playwright (project dev dep) and macOS `sips`.
 #  Run via:  npm run assets   (or ./tools/marketing/build.sh)
@@ -36,6 +39,12 @@ for l in classic modern; do
     sips -z 400 640 "${OUT}/marketing-screenshot-${l}-${t}-1280x800.png" \
       --out "${OUT}/marketing-screenshot-${l}-${t}-640x400.png" >/dev/null 2>&1
   done
+done
+
+# Feature cards (also valid as store screenshots)
+for card in watch-nav backup; do
+  sips -z 400 640 "${OUT}/marketing-feature-${card}-1280x800.png" \
+    --out "${OUT}/marketing-feature-${card}-640x400.png" >/dev/null 2>&1
 done
 
 # JPG copies (Chrome Web Store accepts both PNG and JPG).

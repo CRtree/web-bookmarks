@@ -111,10 +111,17 @@ intent is meaningless: `youtube`, `scroll`, `saver`, `bookmark`.
 | Screenshot 2 — classic, dark | 1280x800 | `marketing-screenshot-classic-dark-1280x800.png` |
 | Screenshot 3 — modern, dark | 1280x800 | `marketing-screenshot-modern-dark-1280x800.png` |
 | Screenshot 4 — classic, light | 1280x800 | `marketing-screenshot-classic-light-1280x800.png` |
+| Feature card — Prev / Next | 1280x800 | `marketing-feature-watch-nav-1280x800.png` |
+| Feature card — Backup / restore | 1280x800 | `marketing-feature-backup-1280x800.png` |
 
 All 640x400 variants are generated alongside the 1280x800 ones; either size is
-accepted. Upload the 1280x800 files — Chrome Web Store allows up to **5** screenshots
-and shows them in upload order, so lead with the current default layout (modern).
+accepted. Chrome Web Store allows up to **5** screenshots, and there are now **6**
+candidates: the four popup screenshots plus the two feature cards. Suggested order:
+lead with modern-light, then classic-dark and modern-dark, and close with the Prev /
+Next and Backup / restore cards — dropping one popup shot (e.g. classic-light) to fit.
+Both feature cards are designed cuts of the real UI — the popup in watch-page mode and
+the real import window driven to its success state (`render-popup.js`) — not hand-built
+mocks, so they cannot drift from the product.
 
 Regenerate everything with:
 

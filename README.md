@@ -314,7 +314,8 @@ Three guards protect against overwriting a valid position:
 ### Store assets
 
 Regenerate the Chrome Web Store promotional images into `store-assets/` — the marquee
-banner, the small promo tile, and popup screenshots for both layouts in light and dark:
+banner, the small promo tile, popup screenshots for both layouts in light and dark, and
+the Prev / Next and Backup / restore feature cards:
 
 ```bash
 npm run assets
