@@ -53,11 +53,18 @@
   // is handled again.
   const restoredThisDocument = new Set();
 
+  // True once YouTube has changed the URL in this document (in-app navigation).
+  // A hard page load starts with a clean, top-of-page DOM, so scanning it needs
+  // no refresh. Reached by SPA navigation, the DOM is dirty (previous page's
+  // cards, scroll position, in-flight renders) and the one reload is justified.
+  let hasInAppNavigation = false;
+
   // YouTube video-ID scan state
   let ytScanTimer = null;
   let ytScanUserInterrupted = false;
   let ytScanLastHeight = 0;
   let ytScanStallCount = 0;
+  let ytScanNoGrowthStreak = 0;
   let ytScanTotalStalls = 0;
   let ytScanInterruptHandler = null;
 
@@ -265,12 +272,18 @@
   // Reported issue: scanning for the saved video on a page that was already open
   // (reached by YouTube's in-page navigation, or scrolled by an earlier scan)
   // produced repeated loading spinners, a scrambled card order, and extra
-  // auto-scroll. A manual refresh fixes it, so whenever a scan is actually needed
-  // we reload once and scan the clean result.
+  // auto-scroll. A manual refresh fixes it, so in that dirty state we reload once
+  // and scan the clean result.
+  //
+  // A hard page load is NOT dirty: it starts at the top with no previous cards.
+  // Reloading it would make every visit do two page loads and add a long delay
+  // before the restore, so `hasInAppNavigation` gates the refresh. Initial loads
+  // scan directly; only in-app navigation pays for a reload.
   //
   // The marker lives in sessionStorage so it survives the reload. It is consumed
   // at the START of the next restore, before anything can bail out. A card already
-  // on screen is scrolled to directly; every other case gets exactly one reload.
+  // on screen is scrolled to directly; every other dirty-navigation case gets
+  // exactly one reload.
   //
   // Note this is NOT a "is the page still fresh?" guess — it never decides to
   // skip a needed reload. Its only time element is a TTL on the marker itself, so
@@ -326,8 +339,8 @@
   }
 
   function notifyVideoNotFound(videoId) {
-    console.warn('[SS:yt] Video not found:', videoId, '(may have been deleted or made private)');
-    showYouTubeToast('Video not found — it may have been deleted or made private.');
+    console.warn('[SS:yt] Video not found:', videoId, '(may have been removed, or saved from another tab such as Shorts/Live)');
+    showYouTubeToast('Video not found in this tab — it may have been removed, or saved from Shorts/Live.');
   }
 
   function cleanupYTScan() {
@@ -337,6 +350,7 @@
     }
     ytScanLastHeight = 0;
     ytScanStallCount = 0;
+    ytScanNoGrowthStreak = 0;
     ytScanTotalStalls = 0;
     detachYTScanInterrupt();
   }
@@ -364,9 +378,32 @@
 
   function progressiveScanForVideo(videoId, attempt, saved) {
     attempt = attempt || 0;
-    const MAX_ATTEMPTS = 60;
-    const MAX_TOTAL_HEIGHT_STALLS = 20;
+    // The old caps (60 attempts / 20 cumulative stalls) could abort a long
+    // channel on a slow connection long before its end: a few slow lazy loads
+    // accumulated stalls and the scan declared the channel finished. The attempt
+    // cap is now only a safety net; the real end is a long run of consecutive
+    // attempts with no height growth.
+    const MAX_ATTEMPTS = 300;
+    const MAX_CONSECUTIVE_NO_GROWTH = 15;
     const RETRY_DELAY = 1000;
+
+    if (!isExtensionValid()) {
+      cleanupYTScan();
+      finishRestore();
+      return;
+    }
+
+    // Always give the current DOM a chance before declaring failure: the last
+    // lazy-loaded batch may contain the target even when the page height did not
+    // change (cards can be recycled in place).
+    const videoLink = findVideoInDOM(videoId, saved && saved.type);
+    if (videoLink) {
+      console.log('[SS:yt] ✅ Found video:', videoId, 'type=' + ((saved && saved.type) || 'video'));
+      scrollVideoIntoView(videoLink);
+      cleanupYTScan();
+      finishRestore();
+      return;
+    }
 
     if (attempt >= MAX_ATTEMPTS) {
       console.log('[SS:yt] ABORT: max attempts reached, video not found');
@@ -377,26 +414,11 @@
       return;
     }
 
-    if (!isExtensionValid()) {
-      cleanupYTScan();
-      finishRestore();
-      return;
-    }
-
-    if (ytScanTotalStalls >= MAX_TOTAL_HEIGHT_STALLS) {
+    if (ytScanNoGrowthStreak >= MAX_CONSECUTIVE_NO_GROWTH) {
       console.log('[SS:yt] Reached end of channel — video', videoId, 'not found');
       cleanupYTScan();
       notifyVideoNotFound(videoId);
       removeYouTubePosition();
-      finishRestore();
-      return;
-    }
-
-    const videoLink = findVideoInDOM(videoId, saved && saved.type);
-    if (videoLink) {
-      console.log('[SS:yt] ✅ Found video:', videoId, 'type=' + ((saved && saved.type) || 'video'));
-      scrollVideoIntoView(videoLink);
-      cleanupYTScan();
       finishRestore();
       return;
     }
@@ -410,10 +432,12 @@
     const newHeight = Math.max(document.body.scrollHeight, document.documentElement.scrollHeight);
     if (newHeight === ytScanLastHeight) {
       ytScanStallCount++;
+      ytScanNoGrowthStreak++;
       ytScanTotalStalls++;
     } else {
       ytScanLastHeight = newHeight;
       ytScanStallCount = 0;
+      ytScanNoGrowthStreak = 0;
     }
 
     if (ytScanStallCount >= 3 && window.scrollY < maxScroll - 100) {
@@ -430,7 +454,8 @@
 
     console.log('[SS:yt] Scan attempt', attempt + 1, '/', MAX_ATTEMPTS,
       'page height', newHeight,
-      'stalls', ytScanTotalStalls + '/' + MAX_TOTAL_HEIGHT_STALLS);
+      'no-growth', ytScanNoGrowthStreak + '/' + MAX_CONSECUTIVE_NO_GROWTH,
+      'total stalls', ytScanTotalStalls);
 
     if (ytScanUserInterrupted) {
       console.log('[SS:yt] ABORT: user interrupted scan');
@@ -514,11 +539,10 @@
           return;
         }
 
-        // The target is off-screen and must be scanned for. Do that on a freshly
-        // reloaded page: the marker records that this refresh already happened,
-        // so the restore that runs after the reload scans instead of reloading
-        // again.
-        if (!scanReloaded) {
+        // The target is off-screen and must be scanned for. On a hard page load
+        // the DOM is already clean, so scan immediately (no forced second load).
+        // Only an in-app navigation carries stale state worth refreshing for.
+        if (hasInAppNavigation && !scanReloaded) {
           if (reloadForScan(targetUrl)) {
             // Deliberately do NOT finishRestore(): keeping isRestoring true blocks
             // any second trigger until the reload unloads this document.
@@ -663,6 +687,7 @@
       cleanupYTScan();
       isRestoring = false;
       restoredThisDocument.clear();
+      hasInAppNavigation = true;
       lastUrl = window.location.href;
       currentUrl = lastUrl;
       // Assume the new URL is not added until the re-check below says otherwise,

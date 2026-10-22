@@ -785,7 +785,35 @@ document.addEventListener('DOMContentLoaded', function() {
     const top = Math.round(availTop + Math.max(0, (availHeight - height) / 2));
 
     if (chrome.windows && chrome.windows.create) {
-      chrome.windows.create({ url: url, type: 'popup', width: width, height: height, left: left, top: top });
+      const options = {
+        url: url,
+        type: 'popup',
+        focused: true,
+        width: width,
+        height: height,
+        left: left,
+        top: top,
+        // Some Chrome/macOS full-screen setups otherwise clone the current
+        // window's full-screen state into the new popup.
+        state: 'normal'
+      };
+      chrome.windows.create(options, function(win) {
+        // Re-assert the normal size shortly after creation: on macOS a popup
+        // opened from a full-screen window can be promoted to full screen after
+        // its initial bounds are applied.
+        if (win && win.id != null && chrome.windows.update) {
+          setTimeout(function() {
+            chrome.windows.update(win.id, {
+              state: 'normal',
+              width: width,
+              height: height,
+              left: left,
+              top: top,
+              focused: true
+            }, function() { void chrome.runtime.lastError; });
+          }, 50);
+        }
+      });
     } else if (chrome.tabs && chrome.tabs.create) {
       chrome.tabs.create({ url: url });
     } else {

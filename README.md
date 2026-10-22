@@ -362,7 +362,7 @@ When adding a locale:
 
 ## ✅ Verification
 
-Five scripts, all runnable from the repo root:
+The core scripts, all runnable from the repo root:
 
 | Script | Covers | Needs network |
 |---|---|---|
@@ -371,6 +371,8 @@ Five scripts, all runnable from the repo root:
 | `npm run verify:click-save` | Click-to-save is armed only for added channels; Add/Stop apply live | no |
 | `npm run verify:duration` | Scrapes a duration from a real channel page and asserts it is what got saved | yes (YouTube) |
 | `npm run verify:transfer` | Export writes a versioned JSON file; import validates, merges, skips junk, and re-enables channels | no |
+| `npm run verify:restore-refresh` | A hard page load restores without the old forced reload (one navigation, no marker) | no |
+| `npm run verify:restore-stalls` | A long scan survives intermittent lazy-load stalls instead of aborting early | no |
 
 Each loads the real extension in Chromium rather than unit-testing in isolation — `/verify:layout`
 clicks the actual toggle button and checks `chrome.action.getPopup()`, `/verify:duration`
@@ -388,6 +390,23 @@ Two gotchas worth knowing if you extend them:
 
 ## 📝 Changelog
 
+### Unreleased
+- **Restore reaches deep videos again** — the scan used to give up after 60 attempts or 20
+  *cumulative* no-growth polls. On a long channel or a slow connection that could stop at the
+  bottom of the loaded list and report the saved video as missing. It now uses 15 *consecutive*
+  no-growth polls to detect the real end, and the attempt cap is only a safety net.
+- **Import opens as a small window** — the import popup now requests `state: 'normal'` and
+  re-asserts its 560×500 bounds after creation, so it no longer inherits full screen from a
+  full-screen browser window.
+- **No forced refresh on page load** — the pre-scan refresh now runs only after an in-app
+  (SPA) navigation, where the DOM can be in a dirty state. A normal hard load scans directly,
+  so opening a saved channel no longer performs two page loads in a row.
+- **Usable scrollbars** — 16px hit areas with 12px visible thumbs in both layouts.
+- **Long stored lists scroll** — Compact cards keep their preview height instead of collapsing
+  into a single compressed pile.
+- **Full-height Prev / Next buttons** on the watch-page preview, with the Stack toolbar given a
+  taller, easier-to-hit bottom bar.
+
 ### v2.1.1 (2026)
 - **Layout names** — the two-column layout is **Compact** again and the editorial single-column
   layout is **Stack**. The names now describe the geometry and are parallel, replacing "Vertical
@@ -397,8 +416,9 @@ Two gotchas worth knowing if you extend them:
   `classic`) and the filenames are unchanged.
 - **Stack toolbar is a fixed floor** — the `Export Log` / `Compact` / theme controls in the Stack
   layout are pinned to the bottom of the popup instead of sitting under the tagline, so a long
-  Stored list never buries them behind a scroll. The bar is slimmer than the card actions and the
-  container reserves matching bottom padding so no entry hides behind it.
+  Stored list never buries them behind a scroll. The bar uses comfortable 12px labels and 7px
+  vertical padding so the controls are easy to hit, and the container reserves matching bottom
+  padding so no entry hides behind it.
 
 ### v2.1.0 (2026)
 - **Export / import the saved list** — the Stored panel gains **Export** (writes every saved position to a

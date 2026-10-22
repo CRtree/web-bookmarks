@@ -154,3 +154,39 @@ els.close.addEventListener('click', function() {
     window.close();
   }
 });
+
+// Windows opened over a full-screen browser window can be promoted to full
+// screen after creation, even when the creator asked for 560x500. Re-assert a
+// normal small window from the page itself once it is alive.
+function ensureNormalWindow() {
+  // If Chrome put this page in HTML full screen, leave full screen.
+  if (document.fullscreenElement && document.exitFullscreen) {
+    const exited = document.exitFullscreen();
+    if (exited && exited.catch) exited.catch(function() {});
+  }
+  if (!chrome.windows || !chrome.windows.getCurrent || !chrome.windows.update) return;
+  chrome.windows.getCurrent(function(win) {
+    if (!win || win.id == null) return;
+    const isFullscreen = win.state === 'fullscreen' || win.state === 'locked-fullscreen';
+    // Some platforms report state "normal" but hand back full-screen bounds.
+    const tooBig = win.width > 900 || win.height > 700;
+    if (!isFullscreen && !tooBig) return;
+    const width = 560;
+    const height = 500;
+    const scr = window.screen || {};
+    const availLeft = typeof scr.availLeft === 'number' ? scr.availLeft : 0;
+    const availTop = typeof scr.availTop === 'number' ? scr.availTop : 0;
+    const availWidth = scr.availWidth || scr.width || 1280;
+    const availHeight = scr.availHeight || scr.height || 800;
+    chrome.windows.update(win.id, {
+      state: 'normal',
+      width: width,
+      height: height,
+      left: Math.round(availLeft + Math.max(0, (availWidth - width) / 2)),
+      top: Math.round(availTop + Math.max(0, (availHeight - height) / 2)),
+      focused: true
+    }, function() { void chrome.runtime.lastError; });
+  });
+}
+setTimeout(ensureNormalWindow, 100);
+setTimeout(ensureNormalWindow, 700);

@@ -152,6 +152,15 @@ try {
   check(importWin.url().endsWith('import.html'), 'Import opens the dedicated window', importWin.url());
   check(await importWin.locator('#file').count() === 1, 'import window has a file input');
 
+  // The import window must stay a normal popup (not inherit full screen from
+  // the browser window it was opened over). Headless Chromium reports its own
+  // viewport size, so only the state is portable here.
+  await importWin.waitForTimeout(250);
+  const importBounds = await importWin.evaluate(() => new Promise((r) =>
+    chrome.windows.getCurrent((w) => r(w ? { width: w.width, height: w.height, state: w.state } : null))));
+  check(importBounds && importBounds.state === 'normal',
+    'import window opens in normal (not full-screen) state', JSON.stringify(importBounds));
+
   await importWin.setInputFiles('#file', importFile);
   await importWin.waitForSelector('#state-success:not([hidden])', { timeout: 10000 }).catch(() => {});
 

@@ -66,7 +66,7 @@ body.theme-dark {
 }
 
 .container {
-  padding: 16px 16px 52px;
+  padding: 16px 16px 64px;
 }
 
 /* ---- Toolbar ----
@@ -84,19 +84,19 @@ body.theme-dark {
   display: flex;
   justify-content: center;
   flex-wrap: wrap;
-  gap: 6px;
-  padding: 5px 12px;
+  gap: 8px;
+  padding: 9px 12px;
   background: var(--color-bg);
   border-top: 1px solid var(--color-border);
   box-shadow: 0 -4px 12px rgba(45, 36, 22, 0.06);
   animation: fadeUp 0.5s 0.2s cubic-bezier(0.22, 0.61, 0.36, 1) both;
 }
 
-/* The floor is secondary chrome, so its buttons run smaller than the card
-   actions: tighter padding and a 11px label keep the bar to a slim strip. */
+/* The floor is secondary chrome, but its buttons still need a comfortable
+   target: 12px labels with 7px vertical padding give the bar more height. */
 .toolbar .btn-utility {
-  font-size: 11px;
-  padding: 3px 8px;
+  font-size: 12px;
+  padding: 7px 12px;
 }
 
 body.theme-dark .toolbar {
@@ -543,16 +543,18 @@ body.theme-dark .toolbar {
   padding-right: 30px;
 }
 
-/* Scoped to the toolbar's compact size; the ID selector would otherwise
-   out-specify `.toolbar .btn-utility`. */
+/* Scoped to the toolbar's new 12px label size. */
 .toolbar #theme-toggle {
-  font-size: 11px;
+  font-size: 12px;
 }
 
 /* ---- Scrollbar ---- */
 
+/* Same wide hit area / visible thumb as the Compact layout — thin bars are
+   hard to grab on a 360px-wide popup. */
 ::-webkit-scrollbar {
-  width: 4px;
+  width: 16px;
+  height: 16px;
 }
 
 ::-webkit-scrollbar-track {
@@ -560,12 +562,16 @@ body.theme-dark .toolbar {
 }
 
 ::-webkit-scrollbar-thumb {
+  min-height: 40px;
+  border: 2px solid transparent;
+  border-radius: 999px;
   background: var(--color-border);
-  border-radius: 2px;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--color-text-tertiary);
+  background-clip: padding-box;
 }
 
 /* ---- Animations ---- */
@@ -594,40 +600,54 @@ body.theme-dark .toolbar {
   margin-bottom: 0;
 }
 
+/* Full-height buttons down each side of the preview; the arrow sits centred. */
 .watch-nav-arrow {
   position: absolute;
-  top: 50%;
+  top: 0;
+  bottom: 0;
   z-index: 2;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 34px;
-  height: 34px;
+  width: 25%;
+  min-width: 44px;
+  max-width: 64px;
   padding: 0;
   border: none;
-  border-radius: 50%;
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
   font-family: var(--font-body);
-  font-size: 22px;
+  font-size: 30px;
   font-weight: 600;
   line-height: 1;
   cursor: pointer;
-  transform: translateY(-50%);
-  transition: background 0.12s ease, transform 0.12s ease;
+  transition: background 0.12s ease;
 }
 
-.watch-nav-arrow.prev { left: 8px; }
-.watch-nav-arrow.next { right: 8px; }
+.watch-nav-arrow.prev {
+  left: 0;
+  border-radius: 4px 0 0 4px;
+}
+
+.watch-nav-arrow.next {
+  right: 0;
+  border-radius: 0 4px 4px 0;
+}
 
 .watch-nav-arrow:hover,
 .watch-nav-arrow:focus-visible {
   background: var(--color-accent);
-  transform: translateY(-50%) scale(1.1);
 }
 
 .watch-nav-arrow:active {
-  transform: translateY(-50%) scale(0.95);
+  background: var(--color-accent-hover);
+}
+
+/* Keep the duration badge readable above the full-height overlay, but let
+   clicks in its corner reach the Prev/Next button underneath. */
+.watch-nav-media .entry-duration {
+  z-index: 3;
+  pointer-events: none;
 }
 
 .watch-nav-arrow.is-disabled {

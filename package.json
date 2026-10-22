@@ -17,7 +17,9 @@
     "verify:spa-nav": "node tools/verify-spa-nav.mjs",
     "screenshots": "node tools/screenshot-layouts.mjs",
     "package": "./package.sh",
-    "assets": "bash tools/marketing/build.sh"
+    "assets": "bash tools/marketing/build.sh",
+    "verify:restore-refresh": "node tools/verify-restore-refresh.mjs",
+    "verify:restore-stalls": "node tools/verify-restore-stalls.mjs"
   },
   "repository": {
     "type": "git",

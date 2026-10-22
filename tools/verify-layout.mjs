@@ -149,6 +149,44 @@ try {
     `${expectedDefault}: entry falls back to ${expectedDisplay} (no empty preview column)`,
     fallback?.entryDisplay);
 
+  // ---- 3b. A long list must scroll, not squash the cards ----
+  // Compact's stored grid uses auto rows. With many thumbnails they once collapsed
+  // to the panel height (every card became a ~27px strip and the list reported no
+  // overflow), so guard both the row height and the scroll range.
+  if (expectedDefault === 'modern') {
+    console.log('\nlong stored list');
+    await page.evaluate(() => new Promise((r) => {
+      const items = {};
+      for (let i = 0; i < 12; i++) {
+        items[`yt_position_https://www.youtube.com/@scrolltest${i}/videos`] = {
+          videoId: 'EVu1pi2LE50', type: 'video', timestamp: Date.now() - i * 1000,
+        };
+      }
+      chrome.storage.local.set(items, r);
+    }));
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.bringToFront();
+    await page.waitForFunction(() =>
+      document.querySelectorAll('#positions-list .entry').length >= 12,
+      null, { timeout: 5000 }).catch(() => {});
+
+    const grid = await page.evaluate(() => {
+      const list = document.querySelector('#positions-list');
+      const entry = list.querySelector('.entry');
+      const thumb = entry && entry.querySelector('.entry-thumb');
+      return {
+        count: list.querySelectorAll('.entry').length,
+        scrolls: list.scrollHeight > list.clientHeight,
+        entryH: entry ? Math.round(entry.getBoundingClientRect().height) : 0,
+        thumbH: thumb ? Math.round(thumb.getBoundingClientRect().height) : 0,
+      };
+    });
+    check(grid.count >= 12, 'long list renders every entry', String(grid.count));
+    check(grid.scrolls, 'long list overflows and scrolls', JSON.stringify(grid));
+    check(grid.entryH > 90 && grid.entryH >= grid.thumbH - 2,
+      'stored cards keep the full preview height', JSON.stringify(grid));
+  }
+
   // ---- 4. Toggling to the other layout ----
   console.log(`\ntoggling to ${otherPage}`);
   const storedBefore = await storedLayout(page);

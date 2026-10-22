@@ -365,6 +365,10 @@ body {
   overflow-y: auto;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  /* auto rows shrink to fit the panel when thumbnails are still loading, which
+     squashed every card into a strip and suppressed the scrollbar. Size rows to
+     their content so the list overflows and scrolls instead. */
+  grid-auto-rows: max-content;
   align-content: start;
   gap: 8px;
   padding: 10px;
@@ -592,8 +596,11 @@ body {
 
 /* ---- Scrollbar ---- */
 
+/* A 16px hit area with a 12px visible thumb: a standard desktop-size grab
+   target, with a transparent border keeping the visual weight reasonable. */
 ::-webkit-scrollbar {
-  width: 6px;
+  width: 16px;
+  height: 16px;
 }
 
 ::-webkit-scrollbar-track {
@@ -601,12 +608,16 @@ body {
 }
 
 ::-webkit-scrollbar-thumb {
+  min-height: 40px;
+  border: 2px solid transparent;
+  border-radius: 999px;
   background: var(--border);
-  border-radius: 3px;
+  background-clip: padding-box;
 }
 
 ::-webkit-scrollbar-thumb:hover {
   background: var(--text-3);
+  background-clip: padding-box;
 }
 
 .empty-state {
@@ -629,41 +640,54 @@ body {
   margin-bottom: 0;
 }
 
-/* Circular arrows overlaid on the preview edges; the hover fill uses the accent
-   colour so the pair reads as the primary action of the panel. */
+/* Prev / Next are full-height buttons down each side of the preview — the
+   whole edge is the control, with the arrow centred vertically. */
 .watch-nav-arrow {
   position: absolute;
-  top: 50%;
+  top: 0;
+  bottom: 0;
   z-index: 2;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 32px;
-  height: 32px;
+  width: 25%;
+  min-width: 44px;
+  max-width: 64px;
   padding: 0;
   border: none;
-  border-radius: 50%;
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
-  font-size: 22px;
+  font-size: 30px;
   font-weight: 600;
   line-height: 1;
   cursor: pointer;
-  transform: translateY(-50%);
-  transition: background 0.12s ease, transform 0.12s ease;
+  transition: background 0.12s ease;
 }
 
-.watch-nav-arrow.prev { left: 8px; }
-.watch-nav-arrow.next { right: 8px; }
+.watch-nav-arrow.prev {
+  left: 0;
+  border-radius: 6px 0 0 6px;
+}
+
+.watch-nav-arrow.next {
+  right: 0;
+  border-radius: 0 6px 6px 0;
+}
 
 .watch-nav-arrow:hover,
 .watch-nav-arrow:focus-visible {
   background: var(--accent);
-  transform: translateY(-50%) scale(1.1);
 }
 
 .watch-nav-arrow:active {
-  transform: translateY(-50%) scale(0.95);
+  background: var(--accent-hover);
+}
+
+/* Keep the duration badge readable above the full-height overlay, but let
+   clicks in its corner reach the Prev/Next button underneath. */
+.watch-nav-media .entry-duration {
+  z-index: 3;
+  pointer-events: none;
 }
 
 .watch-nav-arrow.is-disabled {
